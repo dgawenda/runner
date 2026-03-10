@@ -47,15 +47,33 @@ Jeśli kiedykolwiek bałeś się wpisać `git push` lub nie rozumiałeś, co dzi
 
 ## 2. Instalacja jedną komendą
 
-> ⚡ **One-click install** — wszystko, czego potrzebujesz, to jeden wiersz w terminalu.
+> ⚡ **One-click install dla PRYWATNEGO repozytorium** — wszystko, czego potrzebujesz, to jeden wiersz w terminalu z tokenem GitHub.
 
-Przed uruchomieniem skryptu upewnij się, że posiadasz **token dostępu** do prywatnego repozytorium GitHub organizacji. Skontaktuj się z administratorem, aby go uzyskać.
+Przed uruchomieniem skryptu upewnij się, że posiadasz **Personal Access Token (PAT)** z dostępem do prywatnego repozytorium (np. `dgawenda/runner`). Skontaktuj się z administratorem, aby go uzyskać.
+
+### Wariant 1 — instalacja z publicznego repozytorium `dgawenda/runner`
+
+Repozytorium jest **publiczne**, więc możesz pobrać skrypt bez dodatkowych nagłówków, przekazując token tylko do samego instalatora:
 
 ```bash
-GITHUB_TOKEN="twój_token_dostępu" bash <(curl -fsSL https://raw.githubusercontent.com/TWOJA_ORGANIZACJA/rnr/main/install.sh)
+GITHUB_TOKEN="twój_token_dostępu" \
+bash <(curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh) \
+  --token "$GITHUB_TOKEN"
 ```
 
-> 💡 Zamień `TWOJA_ORGANIZACJA` na nazwę organizacji GitHub oraz `twój_token_dostępu` na przydzielony token PAT.
+> 💡 Gałąź domyślna w repozytorium to `master`, a skrypt instalacyjny leży w katalogu głównym (`install.sh`).
+
+### Wariant 2 — gdy repozytorium `runner` jest już sklonowane lokalnie
+
+Jeśli masz kod `runner` sklonowany na dysku (tak jak w tym projekcie), możesz użyć lokalnego skryptu:
+
+```bash
+cd /ścieżka/do/runner        # np. /home/alti/neution/runner
+chmod +x ./install.sh
+./install.sh --token "twój_token_dostępu" --repo "dgawenda/runner"
+```
+
+Tutaj `--repo "dgawenda/runner"` mówi instalatorowi, z którego repozytorium ma pobierać binarne release'y przez API GitHub (publiczne albo prywatne — z tokenem).
 
 ### Co robi skrypt instalacyjny?
 

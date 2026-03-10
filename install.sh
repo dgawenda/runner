@@ -2,19 +2,20 @@
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  install.sh — Skrypt Instalacyjny rnr                                  ║
 # ║                                                                          ║
-# ║  Pobiera najnowszy plik binarny rnr z prywatnego repozytorium GitHub   ║
-# ║  i instaluje go w katalogu .rnr/ bieżącego projektu.                  ║
+# ║  Pobiera najnowszy plik binarny rnr z repozytorium GitHub (publicznego ║
+# ║  lub prywatnego) i instaluje go w katalogu .rnr/ bieżącego projektu.   ║
 # ║                                                                          ║
-# ║  Użycie:                                                                ║
-# ║    curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh \
+# ║  Użycie (publiczne repo `dgawenda/runner`, gałąź master):               ║
+# ║    curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh \ ║
 # ║      | bash -s -- --token ghp_TWOJ_TOKEN                               ║
 # ║                                                                          ║
 # ║  Lub lokalnie:                                                           ║
 # ║    ./install.sh --token ghp_TWOJ_TOKEN                                  ║
 # ║                                                                          ║
 # ║  Opcje:                                                                  ║
-# ║    --token TOKEN    GitHub Personal Access Token (wymagany)             ║
-# ║    --repo  REPO     Repozytorium GitHub (domyślnie: z zmiennej RNR_REPO)║
+# ║    --token TOKEN    GitHub Personal Access Token (zalecany / wymagany   ║
+# ║                     przy prywatnym repozytorium)                        ║
+# ║    --repo  REPO     Repozytorium GitHub (domyślnie: dgawenda/runner     ║
 # ║    --tag   TAG      Wersja do zainstalowania (domyślnie: najnowsza)     ║
 # ║    --dir   DIR      Katalog instalacji (domyślnie: .rnr/)               ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
@@ -35,7 +36,7 @@ NC='\033[0m' # No Color
 # ─── Domyślne wartości ─────────────────────────────────────────────────────
 
 GITHUB_TOKEN="${RNR_GITHUB_TOKEN:-}"
-GITHUB_REPO="${RNR_REPO:-neution/rnr}"
+GITHUB_REPO="${RNR_REPO:-dgawenda/runner}"
 RELEASE_TAG="${RNR_VERSION:-latest}"
 INSTALL_DIR="${RNR_INSTALL_DIR:-.rnr}"
 BINARY_NAME="rnr"
@@ -96,7 +97,7 @@ check_requirements() {
   done
 
   if [[ -z "$GITHUB_TOKEN" ]]; then
-    die "Brak tokenu GitHub!\n\n  Podaj token przez:\n  • Argument:   --token ghp_TWOJ_TOKEN\n  • Zmienną:    RNR_GITHUB_TOKEN=ghp_TWOJ_TOKEN ./install.sh\n\n  Token potrzebny do pobrania z prywatnego repozytorium."
+    warn "Brak tokenu GitHub — instalacja z publicznego repozytorium będzie działać,\n  ale limity API GitHub mogą być niższe. Dla prywatnego repo użyj flagi --token."
   fi
 
   success "Wymagania spełnione"
@@ -141,11 +142,18 @@ fetch_release_info() {
   fi
 
   local response
-  response=$(curl -fsSL \
-    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-    -H "Accept: application/vnd.github+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "$api_url") || die "Nie można pobrać informacji o release. Sprawdź token i nazwę repozytorium."
+  if [[ -n "$GITHUB_TOKEN" ]]; then
+    response=$(curl -fsSL \
+      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "$api_url") || die "Nie można pobrać informacji o release. Sprawdź token i nazwę repozytorium."
+  else
+    response=$(curl -fsSL \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "$api_url") || die "Nie można pobrać informacji o release. Sprawdź nazwę repozytorium."
+  fi
 
   RELEASE_TAG_RESOLVED=$(echo "$response" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
   if [[ -z "$RELEASE_TAG_RESOLVED" ]]; then
@@ -180,12 +188,19 @@ download_binary() {
 
   local archive_file="${TMP_DIR}/rnr_archive"
 
-  # Pobierz z autoryzacją
-  curl -fsSL --progress-bar \
-    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-    -H "Accept: application/octet-stream" \
-    -L "$ASSET_URL" \
-    -o "$archive_file" || die "Pobieranie nieudane. Sprawdź połączenie sieciowe i token."
+  # Pobierz (z autoryzacją jeśli dostępny jest token)
+  if [[ -n "$GITHUB_TOKEN" ]]; then
+    curl -fsSL --progress-bar \
+      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+      -H "Accept: application/octet-stream" \
+      -L "$ASSET_URL" \
+      -o "$archive_file" || die "Pobieranie nieudane. Sprawdź połączenie sieciowe i token."
+  else
+    curl -fsSL --progress-bar \
+      -H "Accept: application/octet-stream" \
+      -L "$ASSET_URL" \
+      -o "$archive_file" || die "Pobieranie nieudane. Sprawdź połączenie sieciowe."
+  fi
 
   success "Pobrano plik"
 
