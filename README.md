@@ -98,6 +98,28 @@ A następnie sprawdzić, czy instalacja przebiegła pomyślnie:
 rnr --version
 ```
 
+### Szybki start z własnym projektem (dowolne „demo”)
+
+Po zainstalowaniu binarki możesz użyć `rnr` w **dowolnym repozytorium**, niezależnie od tego, jak nazywa się Twój projekt/demo:
+
+```bash
+cd /ścieżka/do/twojego/projektu   # np. ~/projects/moje-demo
+rnr init                          # uruchomi Setup Wizard i wygeneruje rnr.yaml + rnr.conf.yaml
+rnr                                # otworzy Dashboard dla tego projektu
+```
+
+- `rnr init` zawsze działa „na miejscu” — dostosuje się do aktualnego katalogu (Twojego demo).
+- `rnr` można wywoływać jako:
+  - globalne polecenie w PATH (jeśli użyłeś `install.sh` jako instalatora systemowego), albo
+  - lokalną binarkę z repo `runner`, np. `./.rnr/rnr` uruchomioną z Twojego projektu:
+
+```bash
+cd /ścieżka/do/twojego/projektu
+/home/alti/neution/runner/.rnr/rnr --dir .
+```
+
+README nie zakłada żadnego konkretnego folderu demo — wystarczy, że wejdziesz do swojego projektu i użyjesz powyższych komend.
+
 ---
 
 ## 3. Pierwsze uruchomienie — Setup Wizard
