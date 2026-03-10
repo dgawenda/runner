@@ -1,0 +1,61 @@
+# rnr.yaml — Pipeline Definition
+# ✅ SAFE TO COMMIT — no secrets here
+# Secrets and credentials live in rnr.conf.yaml (gitignored)
+#
+# Stage types:
+#   (default)  — run the 'run' command
+#   database   — handled by the database provider (from rnr.conf.yaml)
+#   deploy     — handled by the deploy provider  (from rnr.conf.yaml)
+#   health     — auto health check against environment url
+#
+# Stage fields:
+#   name          required  stage identifier (used in --skip / --only)
+#   run           optional  shell command to execute
+#   type          optional  database | deploy | health
+#   allow_failure optional  true = warn but continue on failure
+#   only          optional  list of environments that run this stage
+
+stages:
+
+  # ── Install dependencies ─────────────────────────────────────────────────
+  - name: install
+    run: npm ci
+
+  # ── Code quality ─────────────────────────────────────────────────────────
+  - name: lint
+    run: npm run lint
+    allow_failure: true
+
+  - name: typecheck
+    run: npx tsc --noEmit
+    allow_failure: true
+
+  # ── Tests ─────────────────────────────────────────────────────────────────
+  # Provisional tests — adapt to your test runner (vitest, jest, playwright)
+  - name: test:unit
+    run: npm run test:unit -- --run --passWithNoTests
+    allow_failure: true
+
+  - name: test:e2e
+    run: npm run test:e2e -- --passWithNoTests
+    allow_failure: true
+    only: [production, staging]
+
+  # ── Build ─────────────────────────────────────────────────────────────────
+  - name: build
+    run: npm run build
+    artifacts: dist/
+
+  # ── Database migrations ───────────────────────────────────────────────────
+  - name: migrate
+    type: database
+    only: [production, staging]
+
+  # ── Deploy ────────────────────────────────────────────────────────────────
+  - name: deploy
+    type: deploy
+
+  # ── Health check ──────────────────────────────────────────────────────────
+  - name: health
+    type: health
+    allow_failure: true
