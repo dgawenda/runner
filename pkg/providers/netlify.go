@@ -16,16 +16,22 @@
 package providers
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/neution/rnr/pkg/config"
 	"github.com/neution/rnr/pkg/logger"
 )
+
+// timeNowUnix zwraca aktualny czas Unix — helper dla netlifySlug retry.
+func timeNowUnix() int64 { return time.Now().UnixMilli() }
 
 const netlifyInstallHint = "npm install -g netlify-cli\n  lub: yarn global add netlify-cli"
 
@@ -58,7 +64,7 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 
 	// ── Tryb: utwórz nowy projekt przez Netlify REST API ────────────────
 	if d.NetlifyCreateNew && d.NetlifySiteID == "" {
-		siteID, err := p.createSiteViaAPI(d.NetlifyAuthToken, outputCh)
+		siteID, err := p.createSiteViaAPI(d.NetlifyAuthToken, env.ProjectName, outputCh)
 		if err != nil {
 			return err
 		}
@@ -81,8 +87,16 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 		return err
 	}
 
+	// ── Wczytaj zmienne z pliku .env ─────────────────────────────────────
+	// Zmienne z .env są potrzebne podczas builda i wdrożenia.
+	// Sekrety są automatycznie maskowane w logach.
+	dotEnvVars := readDotEnv(".")
+	if len(dotEnvVars) > 0 {
+		send(outputCh, fmt.Sprintf("📄 Netlify: załadowano %d zmiennych z .env", len(dotEnvVars)))
+	}
+
 	// Buduj argumenty komendy
-	args := []string{"deploy", "--site", d.NetlifySiteID}
+	args := []string{"deploy", "--site", d.NetlifySiteID, "--dir", "."}
 	if d.NetlifyProd {
 		args = append(args, "--prod")
 		send(outputCh, "🚀 Netlify: wdrożenie na PRODUKCJĘ (--prod)")
@@ -90,11 +104,31 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 		send(outputCh, "🔍 Netlify: wdrożenie podglądu (preview deploy)")
 	}
 
-	// Zmienne środowiskowe dla Netlify CLI
-	envVars := mergeEnv(env.Env, map[string]string{
+	// Przekaż zmienne środowiskowe do Netlify CLI jako flagi --env KEY=VALUE.
+	// Kolejność priorytetu: env.Env (rnr.yaml) > .env plik > token Netlify
+	for k, v := range dotEnvVars {
+		// Nie nadpisuj zmiennych zdefiniowanych bezpośrednio w rnr.yaml
+		if _, ok := env.Env[k]; !ok {
+			args = append(args, "--env", fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+
+	// Zmienne środowiskowe dla procesu CLI (systemowe — dla autoryzacji)
+	envVars := mergeEnv(dotEnvVars, env.Env)
+	envVars = mergeEnv(envVars, map[string]string{
 		"NETLIFY_AUTH_TOKEN": d.NetlifyAuthToken,
 		"NETLIFY_SITE_ID":    d.NetlifySiteID,
 	})
+
+	send(outputCh, fmt.Sprintf("⚙️  netlify deploy --site %s %s",
+		d.NetlifySiteID,
+		func() string {
+			if d.NetlifyProd {
+				return "--prod"
+			}
+			return "(preview)"
+		}(),
+	))
 
 	runner := NewRunner(".", p.masker, p.log)
 	result := runner.RunCommand(ctx, "netlify", args, envVars, outputCh)
@@ -107,12 +141,66 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	return nil
 }
 
+// readDotEnv wczytuje plik .env z podanego katalogu i zwraca mapę KEY → VALUE.
+// Ignoruje komentarze (#), puste linie i nieprawidłowe wpisy.
+// Format pliku .env:
+//
+//	KEY=value
+//	KEY="wartość z spacjami"
+//	# To jest komentarz
+func readDotEnv(dir string) map[string]string {
+	result := make(map[string]string)
+	f, err := os.Open(dir + "/.env")
+	if err != nil {
+		return result // Brak pliku .env — normalne, nie błąd
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Pomiń komentarze i puste linie
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Pomiń linie bez znaku =
+		idx := strings.IndexByte(line, '=')
+		if idx <= 0 {
+			continue
+		}
+
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+
+		// Usuń opcjonalne cudzysłowy
+		if (strings.HasPrefix(val, `"`) && strings.HasSuffix(val, `"`)) ||
+			(strings.HasPrefix(val, `'`) && strings.HasSuffix(val, `'`)) {
+			val = val[1 : len(val)-1]
+		}
+
+		if key != "" {
+			result[key] = val
+		}
+	}
+	return result
+}
+
 // createSiteViaAPI tworzy nowy projekt Netlify przez REST API (bez CLI!).
 // Wystarczy token — nie wymaga zainstalowanego netlify-cli.
-func (p *netlifyProvider) createSiteViaAPI(token string, outputCh chan<- string) (string, error) {
-	send(outputCh, "✨ Netlify: tworzenie nowego projektu przez API...")
+// Projekt dostaje nazwę opartą o projectName (slugified), nie losowy hash.
+func (p *netlifyProvider) createSiteViaAPI(token, projectName string, outputCh chan<- string) (string, error) {
+	// Przygotuj nazwę projektu: tylko małe litery, cyfry, myślniki
+	siteName := netlifySlug(projectName)
+	if siteName == "" {
+		siteName = "rnr-project"
+	}
 
-	req, err := http.NewRequest("POST", "https://api.netlify.com/api/v1/sites", strings.NewReader("{}"))
+	send(outputCh, fmt.Sprintf("✨ Netlify: tworzenie projektu '%s' przez REST API...", siteName))
+
+	body := fmt.Sprintf(`{"name":%q,"custom_domain":null}`, siteName)
+	req, err := http.NewRequest("POST", "https://api.netlify.com/api/v1/sites", strings.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("błąd tworzenia zapytania do Netlify API: %w", err)
 	}
@@ -127,6 +215,21 @@ func (p *netlifyProvider) createSiteViaAPI(token string, outputCh chan<- string)
 
 	if resp.StatusCode == 401 {
 		return "", fmt.Errorf("nieautoryzowany dostęp do Netlify API — sprawdź netlify_auth_token")
+	}
+	if resp.StatusCode == 422 {
+		// Nazwa zajęta — spróbuj z losowym suffixem
+		send(outputCh, fmt.Sprintf("⚠ Nazwa '%s' jest zajęta — dodaję losowy sufiks...", siteName))
+		siteName = fmt.Sprintf("%s-%d", siteName, timeNowUnix()%10000)
+		body = fmt.Sprintf(`{"name":%q}`, siteName)
+		req2, _ := http.NewRequest("POST", "https://api.netlify.com/api/v1/sites", strings.NewReader(body))
+		req2.Header.Set("Authorization", "Bearer "+token)
+		req2.Header.Set("Content-Type", "application/json")
+		resp2, err2 := http.DefaultClient.Do(req2)
+		if err2 != nil {
+			return "", fmt.Errorf("błąd połączenia z Netlify API (retry): %w", err2)
+		}
+		defer resp2.Body.Close()
+		resp = resp2
 	}
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("Netlify API zwróciło błąd HTTP %d — sprawdź token i spróbuj ponownie", resp.StatusCode)
@@ -144,8 +247,28 @@ func (p *netlifyProvider) createSiteViaAPI(token string, outputCh chan<- string)
 		return "", fmt.Errorf("Netlify API nie zwróciło Site ID — sprawdź token i spróbuj ponownie")
 	}
 
-	send(outputCh, fmt.Sprintf("✅ Nowy projekt Netlify: %s (URL: %s)", result.Name, result.URL))
+	send(outputCh, fmt.Sprintf("✅ Nowy projekt Netlify: '%s'", result.Name))
+	send(outputCh, fmt.Sprintf("   🌐 URL: %s", result.URL))
 	return result.ID, nil
+}
+
+// netlifySlug zamienia nazwę projektu na prawidłowy slug Netlify:
+// tylko małe litery, cyfry i myślniki, max 63 znaki.
+func netlifySlug(name string) string {
+	slug := strings.ToLower(name)
+	var b strings.Builder
+	for _, r := range slug {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else if r == ' ' || r == '_' || r == '-' || r == '.' {
+			b.WriteRune('-')
+		}
+	}
+	result := strings.Trim(b.String(), "-")
+	if len(result) > 63 {
+		result = result[:63]
+	}
+	return result
 }
 
 // Rollback dla Netlify — redeployuje przywróconą wersję kodu.

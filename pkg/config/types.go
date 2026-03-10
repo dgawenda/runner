@@ -69,6 +69,10 @@ type Stage struct {
 	// Name — unikalny identyfikator etapu (np. "install", "migrate", "deploy").
 	Name string `yaml:"name"`
 
+	// Description — opis etapu wyświetlany w TUI podczas wdrożenia.
+	// Jeśli puste, rnr generuje automatyczny opis na podstawie nazwy/typu.
+	Description string `yaml:"description,omitempty"`
+
 	// Run — komenda powłoki do wykonania (dla etapów typu shell).
 	Run string `yaml:"run,omitempty"`
 
@@ -341,6 +345,11 @@ type DatabaseConfig struct {
 // Environment to scalone środowisko (spec z rnr.yaml + sekrety z rnr.conf.yaml).
 // Używane przez cały system po załadowaniu konfiguracji.
 type Environment struct {
+	// ProjectName — nazwa projektu z sekcji project.name w rnr.yaml.
+	// Wypełniane automatycznie przy scalaniu konfiguracji.
+	// Używane np. przez Netlify przy tworzeniu nowego projektu.
+	ProjectName string
+
 	Branch    string
 	URL       string
 	Protected bool

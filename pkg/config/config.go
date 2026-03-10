@@ -113,10 +113,11 @@ func mergeEnvironments(pipeline *PipelineConfig, conf *ConfConfig) map[string]En
 	result := make(map[string]Environment)
 	for name, spec := range pipeline.Environments {
 		env := Environment{
-			Branch:    spec.Branch,
-			URL:       spec.URL,
-			Protected: spec.Protected,
-			Env:       spec.Env,
+			ProjectName: pipeline.Project.Name,
+			Branch:      spec.Branch,
+			URL:         spec.URL,
+			Protected:   spec.Protected,
+			Env:         spec.Env,
 			Deploy: DeployConfig{
 				Provider:      spec.Deploy.Provider,
 				NetlifyProd:   spec.Deploy.NetlifyProd,

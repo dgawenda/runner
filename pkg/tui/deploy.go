@@ -314,16 +314,16 @@ func (m DeployModel) renderStages(width int) string {
 			durationStr = StyleMuted.Render("  (pominięty)")
 		}
 
-		// Opis etapu
+		// Ikona i opis etapu
+		icon := stageIcon(entry.Stage)
+		descText := stageDescription(entry.Stage)
 		var desc string
-		if entry.Stage.Run != "" {
-			desc = StyleMuted.Render("  " + truncateStr(entry.Stage.Run, width-40))
-		} else if entry.Stage.Type != "" {
-			desc = StyleMuted.Render("  [" + entry.Stage.Type + "]")
+		if descText != "" {
+			desc = StyleMuted.Render("  " + truncateStr(descText, width-42))
 		}
 
 		isActive := i == m.currentStep && entry.State == StageRunning
-		namePart := nameStyle.Render(fmt.Sprintf("%-16s", entry.Stage.Name))
+		namePart := nameStyle.Render(fmt.Sprintf("%s %-14s", icon, entry.Stage.Name))
 
 		line := fmt.Sprintf("%s  %s%s%s", iconStr, namePart, desc, durationStr)
 
@@ -423,4 +423,104 @@ func formatDuration(ms int64) string {
 		return fmt.Sprintf("%.1fs", float64(ms)/1000)
 	}
 	return fmt.Sprintf("%dm%ds", ms/60000, (ms%60000)/1000)
+}
+
+// stageIcon zwraca emoji-ikonę odpowiednią dla danego etapu.
+// Ikona jest dobierana na podstawie typu lub nazwy etapu.
+func stageIcon(s config.Stage) string {
+	switch s.Type {
+	case config.StageTypeGit:
+		return "🔀"
+	case config.StageTypeDeploy:
+		return "🚀"
+	case config.StageTypeDatabase:
+		return "🗄️ "
+	case config.StageTypeHealth:
+		return "💊"
+	}
+
+	// Dobierz ikonę na podstawie popularnych nazw etapów
+	name := strings.ToLower(s.Name)
+	switch {
+	case name == "install" || name == "deps" || strings.Contains(name, "install"):
+		return "📦"
+	case name == "build" || strings.Contains(name, "build"):
+		return "🏗️ "
+	case strings.HasPrefix(name, "test") || strings.Contains(name, "test"):
+		return "🧪"
+	case name == "lint" || strings.Contains(name, "lint"):
+		return "🔍"
+	case name == "typecheck" || name == "types" || strings.Contains(name, "type"):
+		return "✅"
+	case name == "migrate" || strings.Contains(name, "migrat"):
+		return "🗄️ "
+	case name == "clean" || strings.Contains(name, "clean"):
+		return "🧹"
+	case strings.Contains(name, "docker"):
+		return "🐳"
+	case strings.Contains(name, "git"):
+		return "🔀"
+	default:
+		return "⚙️ "
+	}
+}
+
+// stageDescription zwraca czytelny opis etapu do wyświetlenia w TUI.
+// Używa pola Description z konfiguracji (jeśli jest).
+// Jeśli puste, generuje opis automatycznie na podstawie nazwy i komendy.
+func stageDescription(s config.Stage) string {
+	// Użyj pola Description jeśli zdefiniowane w rnr.yaml
+	if s.Description != "" {
+		return s.Description
+	}
+
+	// Opis na podstawie typu
+	switch s.Type {
+	case config.StageTypeGit:
+		if strings.HasPrefix(s.Run, "checkout:") {
+			branch := strings.TrimPrefix(s.Run, "checkout:")
+			return fmt.Sprintf("Przełączanie na gałąź %s", branch)
+		}
+		if strings.HasPrefix(s.Run, "pull:") {
+			branch := strings.TrimPrefix(s.Run, "pull:")
+			return fmt.Sprintf("Pobieranie aktualizacji z origin/%s", branch)
+		}
+		return "Operacja Git"
+	case config.StageTypeDeploy:
+		return "Wdrożenie na serwer / CDN"
+	case config.StageTypeDatabase:
+		return "Migracje bazy danych"
+	case config.StageTypeHealth:
+		return "Sprawdzanie dostępności serwisu"
+	}
+
+	// Opis na podstawie nazwy
+	name := strings.ToLower(s.Name)
+	switch {
+	case name == "install":
+		return "Instalowanie zależności"
+	case name == "build":
+		return "Budowanie projektu"
+	case name == "lint":
+		return "Sprawdzanie jakości kodu"
+	case name == "typecheck":
+		return "Weryfikacja typów TypeScript"
+	case name == "test" || name == "test:unit":
+		return "Uruchamianie testów jednostkowych"
+	case name == "test:e2e":
+		return "Uruchamianie testów E2E"
+	case name == "migrate":
+		return "Migracje bazy danych"
+	case name == "clean":
+		return "Czyszczenie katalogu dist/"
+	default:
+		// Pokaż komendę shell jako opis (skróconą)
+		if s.Run != "" && len(s.Run) <= 50 {
+			return s.Run
+		}
+		if s.Run != "" {
+			return s.Run[:47] + "..."
+		}
+		return ""
+	}
 }
