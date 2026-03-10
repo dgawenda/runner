@@ -47,40 +47,27 @@ Jeśli kiedykolwiek bałeś się wpisać `git push` lub nie rozumiałeś, co dzi
 
 ## 2. Instalacja jedną komendą
 
-> ⚡ **One-click install dla PRYWATNEGO repozytorium** — wszystko, czego potrzebujesz, to jeden wiersz w terminalu z tokenem GitHub.
+> ⚡ **Najprostsza możliwa instalacja z publicznego GitHuba** — jeden wiersz w terminalu.
 
-Przed uruchomieniem skryptu upewnij się, że posiadasz **Personal Access Token (PAT)** z dostępem do prywatnego repozytorium (np. `dgawenda/runner`). Skontaktuj się z administratorem, aby go uzyskać.
-
-### Wariant 1 — instalacja z publicznego repozytorium `dgawenda/runner`
-
-Repozytorium jest **publiczne**, więc możesz pobrać skrypt bez dodatkowych nagłówków, przekazując token tylko do samego instalatora:
+Repozytorium `dgawenda/runner` jest **publiczne**, więc w typowym scenariuszu wystarczy:
 
 ```bash
-GITHUB_TOKEN="twój_token_dostępu" \
-bash <(curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh) \
-  --token "$GITHUB_TOKEN"
+bash <(curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh)
 ```
 
-> 💡 Gałąź domyślna w repozytorium to `master`, a skrypt instalacyjny leży w katalogu głównym (`install.sh`).
+To pobierze skrypt `install.sh` z gałęzi `master` i zainstaluje binarkę `rnr` do katalogu `.rnr/` w Twoim projekcie (lub do katalogu wskazanego przez `--dir`).
 
-### Wariant 2 — gdy repozytorium `runner` jest już sklonowane lokalnie
-
-Jeśli masz kod `runner` sklonowany na dysku (tak jak w tym projekcie), możesz użyć lokalnego skryptu:
-
-```bash
-cd /ścieżka/do/runner        # np. /home/alti/neution/runner
-chmod +x ./install.sh
-./install.sh --token "twój_token_dostępu" --repo "dgawenda/runner"
-```
-
-Tutaj `--repo "dgawenda/runner"` mówi instalatorowi, z którego repozytorium ma pobierać binarne release'y przez API GitHub (publiczne albo prywatne — z tokenem).
+> 💡 Jeśli masz bardzo restrykcyjne limity API GitHub albo chcesz instalować z prywatnego forka, możesz przekazać token:
+> ```bash
+> GITHUB_TOKEN="twój_token" bash <(curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh) --token "$GITHUB_TOKEN"
+> ```
 
 ### Co robi skrypt instalacyjny?
 
 Skrypt `install.sh` wykonuje następujące kroki automatycznie:
 
 1. **Wykrywa Twój system operacyjny** (Linux, macOS, Windows) i architekturę procesora (amd64, arm64)
-2. **Pobiera najnowszą stabilną wersję** binarną `rnr` z prywatnego repozytorium GitHub przy użyciu autoryzowanego zapytania API (`Authorization: Bearer <TOKEN>`)
+2. **Pobiera najnowszą stabilną wersję** binarną `rnr` z GitHub Releases (`dgawenda/runner`) – jeśli podasz token, użyje autoryzowanego zapytania API, inaczej korzysta z publicznego dostępu
 3. **Tworzy ukryty katalog** `.rnr` w Twoim katalogu domowym
 4. **Instaluje plik wykonywalny** `rnr` w lokalizacji `~/.rnr/rnr`
 5. **Aktualizuje PATH** — dodaje `~/.rnr` do zmiennej środowiskowej `PATH` w pliku `.bashrc`, `.zshrc` lub `.profile`
