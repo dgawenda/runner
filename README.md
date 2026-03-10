@@ -800,8 +800,36 @@ rnr env --help
 | `R` | Rollback — przywróć poprzednią wersję |
 | `P` | Promote — migracje DB staging → production |
 | `L` | Otwórz przeglądarkę logów |
+| `G` | Otwórz Git Panel (status, gałęzie, historia, graf, diff) |
 | `↑ / ↓` | Zmień wybrane środowisko |
 | `Q` / `Ctrl+C` | Wyjdź z rnr |
+
+---
+
+### Skróty klawiaturowe w Git Panelu (styl GitKraken)
+
+Git Panel otwierasz z Dashboardu klawiszem **`G`**. Panel ma cztery zakładki:
+
+- **[1] Status** — lista zmienionych plików, wybór pliku, podgląd `diff` i commit
+- **[2] Gałęzie** — lokalne gałęzie + `git checkout` wybranej
+- **[3] Historia** — tabela ostatnich commitów (hash, kiedy, autor, wiadomość)
+- **[4] GRAF ◈** — wizualny graf commitów w stylu GitKraken (`git log --graph --all`)
+
+Najważniejsze skróty:
+
+| Kontekst | Klawisz | Akcja |
+|----------|---------|-------|
+| Dowolna zakładka | `TAB` / `1–4` | Przełącz zakładkę |
+| Dowolna zakładka | `G` / `Q` | Powrót do Dashboard |
+| Listy (pliki / gałęzie / historia / graf) | `↑ / ↓` lub `j / k` | Nawigacja po wierszach |
+| Zakładka **Status** (lista plików) | `d` / `ENTER` | Podgląd kolorowego `diff` zaznaczonego pliku |
+| Zakładka **Status** (pole commita aktywne) | `ENTER` | `git add -A && git commit` z podaną wiadomością |
+| Zakładka **Status** | `i` | Wejście w edycję wiadomości commita (focus input) |
+| Zakładka **Status** / diff | `ESC` | Wyjście z edycji / zamknięcie podglądu diff |
+| Zakładka **Gałęzie** | `ENTER` | `git checkout` zaznaczonej gałęzi |
+| Zakładka **Graf** | `↑ / ↓` lub `j / k` | Przewijanie grafu commitów (zaznaczony wiersz `▶`) |
+
+Widok **GRAF** używa znaków Unicode (`● │ ╱ ╲ ─`) i kolorów (motyw Dracula) do wizualizacji linii gałęzi, tagów i HEAD, a **diff** w zakładce Status koloruje linie dodane (`+` na zielono), usunięte (`-` na czerwono) i nagłówki hunków (`@@` na niebiesko). Git Panel odświeża się automatycznie co kilka sekund, więc nowe commity i zmiany są widoczne na bieżąco.
 
 ---
 

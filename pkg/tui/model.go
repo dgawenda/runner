@@ -431,16 +431,20 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PromoteStartMsg:
 		m.promoteSource = msg.SourceEnv
 		m.promoteTarget = msg.TargetEnv
-		m.screen = ScreenPromote
+		// Uwaga: m.screen = ScreenPromote jest ustawiane wewnątrz cmdExecutePromote
+		// (która tworzy też deploy model + pipelineCh synchronicznie przed Batch).
 		cmds = append(cmds, m.cmdExecutePromote(msg))
 
 	case PromoteCompletedMsg:
+		// Zachowany dla kompatybilności — nowy flow używa pipelineEventMsg (DeployCompletedMsg).
+		// Może być wywołany przez stare ścieżki kodu.
 		m.loading = true
 		m.screen = ScreenLoading
 		m.loadMsg = "Promote zakończony..."
 		cmds = append(cmds, m.cmdLoadConfig(), m.spinner.Tick)
 
 	case PromoteFailedMsg:
+		// Zachowany dla kompatybilności — nowy flow używa pipelineEventMsg (DeployFailedMsg).
 		m.showError("Błąd Promote", msg.Err.Error(), msg.Err)
 
 	// ── Klawiatura ────────────────────────────────────────────────────
@@ -460,7 +464,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.dashboard, cmd = m.dashboard.Update(msg)
 		cmds = append(cmds, cmd)
-	case ScreenDeploy, ScreenRollback:
+	case ScreenDeploy, ScreenRollback, ScreenPromote:
 		var cmd tea.Cmd
 		m.deploy, cmd = m.deploy.Update(msg)
 		cmds = append(cmds, cmd)
@@ -475,15 +479,28 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case ScreenGit:
-		// Przekaż zdarzenia do git panelu
+		// Przekaż zdarzenia do git panelu — gitPanel przetwarza je PIERWSZY
 		var cmd tea.Cmd
 		m.gitPanel, cmd = m.gitPanel.Update(msg)
 		cmds = append(cmds, cmd)
-		// G lub Q zamykają git panel
+		// Klawiszami G/Q/ESC zamykamy panel — ale TYLKO gdy gitPanel nie obsługuje ich sam.
+		// ESC w gitPanel: zamyka diff lub unfocusuje input (nie zamykamy panelu).
+		// Q w gitPanel z focusem inputa: wpisuje 'q' do inputa (nie zamykamy panelu).
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			switch keyMsg.String() {
-			case "g", "G", "q", "esc":
+			case "g", "G":
 				m.screen = ScreenDashboard
+			case "q":
+				// Nie zamykaj jeśli użytkownik pisze commit (input sfocusowany)
+				if !m.gitPanel.commitInput.Focused() {
+					m.screen = ScreenDashboard
+				}
+			case "esc":
+				// Nie zamykaj jeśli: diff jest otwarty (ESC = zamknij diff)
+				//                  lub input jest sfocusowany (ESC = odblokuj input)
+				if !m.gitPanel.showDiff && !m.gitPanel.commitInput.Focused() {
+					m.screen = ScreenDashboard
+				}
 			}
 		}
 	}
@@ -595,7 +612,7 @@ func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) tea.Cmd {
 			m.screen = ScreenDashboard
 		}
 
-	case ScreenDeploy, ScreenRollback:
+	case ScreenDeploy, ScreenRollback, ScreenPromote:
 		if (msg.String() == "enter" || msg.String() == "q") &&
 			(m.deploy.completed || m.deploy.failed) {
 			m.loading = true
@@ -771,23 +788,62 @@ func (m *RootModel) cmdInitRollback(envName string) tea.Cmd {
 
 func (m *RootModel) cmdInitPromote() tea.Cmd {
 	return func() tea.Msg {
-		envs := m.cfg.GetEnvironmentNames()
-		hasStaging, hasProd := false, false
-		for _, e := range envs {
-			switch e {
-			case "staging":
-				hasStaging = true
-			case "production":
-				hasProd = true
+		envs := m.cfg.Environments
+
+		// Znajdź środowisko źródłowe (staging) i docelowe (production).
+		// Priorytety: dokładne nazwy > protected flag > pierwsze środowisko z bazą DB.
+		var sourceEnv, targetEnv string
+
+		// 1. Preferuj dokładne, typowe nazwy
+		for _, name := range []string{"staging", "stage", "develop", "dev"} {
+			if _, ok := envs[name]; ok && sourceEnv == "" {
+				sourceEnv = name
 			}
 		}
-		if !hasStaging || !hasProd {
+		for _, name := range []string{"production", "prod", "main", "live"} {
+			if _, ok := envs[name]; ok && targetEnv == "" {
+				targetEnv = name
+			}
+		}
+
+		// 2. Fallback: protected = target, first non-protected with DB = source
+		if targetEnv == "" || sourceEnv == "" {
+			for name, env := range envs {
+				hasDB := env.Database.Provider != "" && env.Database.Provider != "none"
+				if env.Protected && hasDB && targetEnv == "" {
+					targetEnv = name
+				} else if !env.Protected && hasDB && sourceEnv == "" {
+					sourceEnv = name
+				}
+			}
+		}
+
+		// 3. Finalny fallback: dowolne dwa środowiska jeśli mamy tylko jedno z DB
+		if targetEnv == "" || sourceEnv == "" {
+			for name := range envs {
+				if name != sourceEnv && targetEnv == "" {
+					targetEnv = name
+				} else if name != targetEnv && sourceEnv == "" {
+					sourceEnv = name
+				}
+			}
+		}
+
+		if sourceEnv == "" || targetEnv == "" {
 			return ErrorMsg{
-				Title:   "Brak środowisk",
-				Message: "Promote wymaga środowisk 'staging' i 'production'.",
+				Title:   "Brak środowisk do promote",
+				Message: "Promote wymaga co najmniej dwóch środowisk.\n\n" +
+					"Upewnij się, że rnr.yaml ma skonfigurowane sekcje\n" +
+					"'environments' z co najmniej dwoma środowiskami.",
 			}
 		}
-		return PromoteStartMsg{SourceEnv: "staging", TargetEnv: "production"}
+		if sourceEnv == targetEnv {
+			return ErrorMsg{
+				Title:   "Błędna konfiguracja",
+				Message: fmt.Sprintf("Źródło i cel promote to to samo środowisko: '%s'.\n", sourceEnv),
+			}
+		}
+		return PromoteStartMsg{SourceEnv: sourceEnv, TargetEnv: targetEnv}
 	}
 }
 
@@ -1193,42 +1249,97 @@ func (m *RootModel) cmdExecuteRollback(msg RollbackStartMsg) tea.Cmd {
 	}
 }
 
+// cmdExecutePromote uruchamia promote bazy danych przez pipeline,
+// tak jak cmdStartDeploy — z pełnym live output w TUI i paskami postępu.
+// Używa pipelineEventMsg zamiast bezpośrednich Promote*Msg, dzięki czemu
+// użytkownik widzi ten sam widok co przy zwykłym wdrożeniu.
 func (m *RootModel) cmdExecutePromote(msg PromoteStartMsg) tea.Cmd {
-	m.deploy = NewDeployModel(m.width, m.height, "promote", nil, false)
+	label := fmt.Sprintf("🗄️  promote DB: %s → %s", msg.SourceEnv, msg.TargetEnv)
 
-	return func() tea.Msg {
+	// Utwórz jeden etap reprezentujący promote
+	stages := []config.Stage{
+		{
+			Name:        label,
+			Type:        config.StageTypeDatabase,
+			Description: fmt.Sprintf("Migracje DB ze %s na %s (roll-forward)", msg.SourceEnv, msg.TargetEnv),
+		},
+	}
+
+	// Inicjalizuj deploy model — taki sam ekran jak przy wdrożeniu
+	m.deployID = uuid.New().String()
+	m.deployEnv = "promote"
+	m.deploy = NewDeployModel(m.width, m.height,
+		fmt.Sprintf("Promote: %s → %s", msg.SourceEnv, msg.TargetEnv),
+		stages, false)
+	m.screen = ScreenPromote
+
+	// Kanał pipeline (taki sam mechanizm jak w cmdRunPipeline)
+	ch := make(chan pipelineEventMsg, 256)
+	m.pipelineCh = ch
+
+	// Przechwytujemy wartości teraz (przed asynchronicznym wykonaniem)
+	deployID := m.deployID
+	sourceEnvCfg := m.cfg.Environments[msg.SourceEnv]
+	targetEnvCfg := m.cfg.Environments[msg.TargetEnv]
+	maskerSecrets := m.cfg.AllSecrets()
+	logsDir := filepath.Join(m.projectRoot, config.LogsDir)
+	stageLabel := label
+
+	promoteCmd := func() tea.Msg {
 		ctx := context.Background()
 
-		sourceEnv := m.cfg.Environments[msg.SourceEnv]
-		targetEnv := m.cfg.Environments[msg.TargetEnv]
-
-		masker := logger.NewMasker(m.cfg.AllSecrets()...)
-		log, _ := logger.NewForDeployment(
-			filepath.Join(m.projectRoot, config.LogsDir),
-			"promote", masker,
-		)
+		masker := logger.NewMasker(maskerSecrets...)
+		log, _ := logger.NewForDeployment(logsDir,
+			"promote_"+msg.TargetEnv, masker)
 		if log != nil {
 			defer log.Close()
 		}
 
+		// Wyślij start etapu
+		ch <- pipelineEventMsg{kind: "stage_start", index: 0, name: stageLabel}
+		startTime := time.Now()
+
+		// Kanał output → pipeline channel (live logi w TUI)
 		outputCh := make(chan string, 128)
 		go func() {
-			for range outputCh {
+			for line := range outputCh {
+				ch <- pipelineEventMsg{kind: "stage_output", index: 0, line: line}
 			}
 		}()
-		defer close(outputCh)
 
-		dbProv, err := providers.NewDatabaseProvider(targetEnv, masker, log)
+		// Utwórz dostawcę DB dla środowiska docelowego
+		dbProv, err := providers.NewDatabaseProvider(targetEnvCfg, masker, log)
 		if err != nil {
-			return PromoteFailedMsg{Err: err}
+			close(outputCh)
+			durMS := time.Since(startTime).Milliseconds()
+			ch <- pipelineEventMsg{kind: "stage_fail", index: 0, name: stageLabel,
+				durationMS: durMS, err: err}
+			ch <- pipelineEventMsg{kind: "fail", deployID: deployID, name: stageLabel, err: err}
+			close(ch)
+			return nil
 		}
 
-		if err := dbProv.Promote(ctx, sourceEnv, targetEnv, outputCh); err != nil {
-			return PromoteFailedMsg{Err: err}
+		// Wykonaj promote (blokuje do zakończenia)
+		err = dbProv.Promote(ctx, sourceEnvCfg, targetEnvCfg, outputCh)
+		close(outputCh) // Zatrzymaj goroutinę forwarding
+		durMS := time.Since(startTime).Milliseconds()
+
+		if err != nil {
+			ch <- pipelineEventMsg{kind: "stage_fail", index: 0, name: stageLabel,
+				durationMS: durMS, err: err}
+			ch <- pipelineEventMsg{kind: "fail", deployID: deployID, name: stageLabel, err: err}
+			close(ch)
+			return nil
 		}
 
-		return PromoteCompletedMsg{}
+		// Sukces
+		ch <- pipelineEventMsg{kind: "stage_done", index: 0, name: stageLabel, durationMS: durMS}
+		ch <- pipelineEventMsg{kind: "done", deployID: deployID, logFile: ""}
+		close(ch)
+		return nil
 	}
+
+	return tea.Batch(m.deploy.Init(), m.cmdWaitPipeline(), promoteCmd)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
