@@ -39,11 +39,20 @@ func (p *supabaseProvider) Name() string { return "Supabase" }
 
 // Migrate uruchamia migracje bazy danych Supabase na docelowym środowisku.
 // Używa: supabase db push --db-url <URL>
+//
+// Wymagania:
+//   - supabase-cli zainstalowany (npm install -g supabase lub scoop/brew)
+//   - supabase_project_ref lub supabase_db_url w rnr.conf.yaml
 func (p *supabaseProvider) Migrate(ctx context.Context, env config.Environment, outputCh chan<- string) error {
 	db := env.Database
 
 	if db.SupabaseProjectRef == "" && db.SupabaseDBURL == "" {
-		return fmt.Errorf("brak supabase_project_ref lub supabase_db_url — uzupełnij w rnr.conf.yaml")
+		return fmt.Errorf("brak supabase_project_ref lub supabase_db_url — uzupełnij w rnr.conf.yaml → environments.X.database")
+	}
+
+	if err := checkCLI("supabase",
+		"npm install -g supabase\n  lub: brew install supabase/tap/supabase\n  lub: scoop install supabase"); err != nil {
+		return err
 	}
 
 	send(outputCh, "🗄️  Supabase: rozpoczynam migracje bazy danych...")
@@ -158,7 +167,11 @@ func (p *prismaProvider) Name() string { return "Prisma" }
 
 func (p *prismaProvider) Migrate(ctx context.Context, env config.Environment, outputCh chan<- string) error {
 	if env.Database.DBURL == "" {
-		return fmt.Errorf("brak db_url dla Prisma — uzupełnij w rnr.conf.yaml")
+		return fmt.Errorf("brak db_url dla Prisma — uzupełnij w rnr.conf.yaml → environments.X.database.db_url")
+	}
+
+	if err := checkCLI("npx", "npm install -g npx  (wymaga Node.js)"); err != nil {
+		return err
 	}
 
 	send(outputCh, "🔷 Prisma: uruchamiam prisma migrate deploy...")

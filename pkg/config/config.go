@@ -257,154 +257,22 @@ func EnsureGitignore(projectRoot string) error {
 // ─── Generowanie pliku rnr.yaml ────────────────────────────────────────────
 
 // DefaultPipelineYAML generuje rnr.yaml z pełną dokumentacją.
-// Zachowany dla kompatybilności — deleguje do DefaultPipelineYAMLForProject.
+// Zachowany dla kompatybilności — deleguje do DefaultPipelineYAMLFromWizard.
 func DefaultPipelineYAML(projectName string) string {
-	return DefaultPipelineYAMLForProject(projectName, true)
+	return DefaultPipelineYAMLFromWizard(projectName, "", "custom", "netlify", "none")
 }
 
 // DefaultPipelineYAMLForProject generuje rnr.yaml dopasowany do typu projektu.
+// Zachowany dla kompatybilności — deleguje do DefaultPipelineYAMLFromWizard.
 //
 //   - hasDB=true  → dodaje etap 'migrate' (fullstack, Supabase, Prisma, itp.)
 //   - hasDB=false → pipeline bez migracji (frontendowy, JAMstack, SPA)
 func DefaultPipelineYAMLForProject(projectName string, hasDB bool) string {
-	migrateStage := ""
+	dbProv := DBProviderNone
 	if hasDB {
-		migrateStage = `
-  # ── Migracje bazy danych ──────────────────────────────────────────────────
-  # Wykonywane tylko na środowiskach produkcyjnych i stagingowych.
-  # Dostawca (supabase/prisma/custom) konfigurowany w rnr.yaml → environments.X.database.
-  # Credentials (hasła, klucze) przechowuj w rnr.conf.yaml → environments.X.database.
-  - name: migrate
-    type: database
-    only: [production, staging]
-`
+		dbProv = DBProviderSupabase
 	}
-
-	return fmt.Sprintf(`# ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  rnr.yaml — Konfiguracja Projektu i Potoku Wdrożeniowego               ║
-# ║  Projekt: %-62s ║
-# ║                                                                          ║
-# ║  ✅ BEZPIECZNY DO COMMITOWANIA — brak tokenów i haseł                  ║
-# ║  🔒 Tokeny i credentials WYŁĄCZNIE w rnr.conf.yaml (gitignored)        ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  STRUKTURA PLIKU:
-#    project      — nazwa, wersja i repo projektu
-#    environments — definicje środowisk (gałęzie, dostawcy — BEZ tokenów!)
-#    stages       — kolejność kroków potoku wdrożeniowego
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# ─── Projekt ─────────────────────────────────────────────────────────────────
-project:
-  name: "%s"
-  version: "1.0.0"
-  repo: ""              # GitHub owner/repo, np. "firma/projekt"
-
-# ─── Środowiska ──────────────────────────────────────────────────────────────
-# Każde środowisko definiuje gałąź Git, URL i wybór DOSTAWCÓW (bez tokenów!).
-# Tokeny i hasła dla każdego środowiska umieść w rnr.conf.yaml → environments.
-
-environments:
-
-  # ── PRODUKCJA ──────────────────────────────────────────────────────────────
-  production:
-    branch: "master"
-    url: ""              # np. "https://moja-aplikacja.com"
-    protected: true      # ⚠️  Wymaga potwierdzenia przed wdrożeniem
-
-    deploy:
-      provider: "netlify"   # netlify | vercel | gh-pages | ssh | docker | custom
-      netlify_prod: true    # true = wdróż na produkcyjny URL Netlify (--prod)
-
-      # Inne dostawcy — odkomentuj jeden z bloków poniżej:
-      # provider: "vercel"
-      # vercel_prod: true
-
-      # provider: "ssh"
-      # ssh_host: "myserver.com"
-      # ssh_user: "deploy"
-      # ssh_path: "/var/www/html"
-      # ssh_source: "dist/"
-
-      # provider: "custom"
-      # deploy_cmd: "./scripts/deploy.sh"
-      # rollback_cmd: "./scripts/rollback.sh"
-
-    database:
-      provider: "supabase"  # supabase | prisma | postgres | mysql | none | custom
-      # db_migrations_dir: "supabase/migrations"
-
-    env:
-      NODE_ENV: "production"
-      # VITE_APP_URL: "https://moja-aplikacja.com"
-
-  # ── STAGING ────────────────────────────────────────────────────────────────
-  staging:
-    branch: "develop"
-    url: ""
-    protected: false
-
-    deploy:
-      provider: "netlify"
-      netlify_prod: false
-
-    database:
-      provider: "supabase"
-
-    env:
-      NODE_ENV: "staging"
-
-# ─── Etapy Potoku Wdrożeniowego ───────────────────────────────────────────────
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  TYPY ETAPÓW:
-#    (brak)     — komenda powłoki z pola 'run'
-#    database   — migracja bazy (dostawca z environments.X.database)
-#    deploy     — wdrożenie    (dostawca z environments.X.deploy)
-#    health     — sprawdzenie dostępności URL (environments.X.url)
-#
-#  POLA ETAPU:
-#    name          [wymagane]  unikalny identyfikator
-#    run           [opcjonalne] komenda powłoki
-#    type          [opcjonalne] database | deploy | health
-#    allow_failure [opcjonalne] true = nie przerywaj potoku przy błędzie
-#    only          [opcjonalne] lista środowisk (np. [production, staging])
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-stages:
-
-  # ── Instalacja zależności ──────────────────────────────────────────────────
-  - name: install
-    run: npm ci
-
-  # ── Jakość kodu ───────────────────────────────────────────────────────────
-  - name: lint
-    run: npm run lint
-    allow_failure: true
-
-  - name: typecheck
-    run: npx tsc --noEmit
-    allow_failure: true
-
-  # ── Testy ─────────────────────────────────────────────────────────────────
-  - name: test:unit
-    run: npm run test:unit -- --run --passWithNoTests
-    allow_failure: true
-%s
-  # ── Build ─────────────────────────────────────────────────────────────────
-  - name: build
-    run: npm run build
-    artifacts: dist/
-
-  # ── Wdrożenie ─────────────────────────────────────────────────────────────
-  - name: deploy
-    type: deploy
-
-  # ── Sprawdzenie zdrowia aplikacji ─────────────────────────────────────────
-  - name: health
-    type: health
-    allow_failure: true
-`, projectName, projectName, migrateStage)
+	return DefaultPipelineYAMLFromWizard(projectName, "", "npm", "netlify", dbProv)
 }
 
 // ─── Generowanie pliku rnr.conf.yaml ──────────────────────────────────────
@@ -499,12 +367,33 @@ environments:
 // DefaultPipelineYAMLFromWizard generuje rnr.yaml z danymi zebranymi przez Setup Wizard.
 // Wypełnia sekcje project i environments na podstawie wyboru użytkownika.
 // Sekrety (tokeny, klucze) NIE trafiają tutaj — są zapisywane do rnr.conf.yaml.
+//
+// projectType: "html" | "npm" | "python" | "custom"
 func DefaultPipelineYAMLFromWizard(
 	projectName, repo string,
-	deployProv, dbProv string,
-	hasDB bool,
+	projectType, deployProv, dbProv string,
 ) string {
-	netlifyProdStr := "true"
+	hasDB := dbProv != "" && dbProv != DBProviderNone
+
+	deployBlock := fmt.Sprintf(`provider: "%s"`, deployProv)
+	if deployProv == ProviderNetlify {
+		deployBlock = fmt.Sprintf("provider: \"%s\"\n      netlify_prod: true", deployProv)
+	} else if deployProv == ProviderVercel {
+		deployBlock = fmt.Sprintf("provider: \"%s\"\n      vercel_prod: true", deployProv)
+	}
+
+	stagingDeployBlock := fmt.Sprintf(`provider: "%s"`, deployProv)
+	if deployProv == ProviderNetlify {
+		stagingDeployBlock = fmt.Sprintf("provider: \"%s\"\n      netlify_prod: false", deployProv)
+	} else if deployProv == ProviderVercel {
+		stagingDeployBlock = fmt.Sprintf("provider: \"%s\"", deployProv)
+	}
+
+	dbBlock := fmt.Sprintf(`provider: "%s"`, dbProv)
+	if dbProv == "" || dbProv == DBProviderNone {
+		dbBlock = `provider: "none"`
+	}
+
 	migrateStage := ""
 	if hasDB {
 		migrateStage = `
@@ -515,16 +404,98 @@ func DefaultPipelineYAMLFromWizard(
 `
 	}
 
-	deployBlock := fmt.Sprintf(`provider: "%s"`, deployProv)
-	if deployProv == ProviderNetlify {
-		deployBlock = fmt.Sprintf("provider: \"%s\"\n      netlify_prod: %s", deployProv, netlifyProdStr)
-	} else if deployProv == ProviderVercel {
-		deployBlock = fmt.Sprintf("provider: \"%s\"\n      vercel_prod: true", deployProv)
-	}
+	// Generuj etapy potoku odpowiednie dla typu projektu
+	var stagesBlock string
+	switch projectType {
+	case "html":
+		// Projekt statyczny — bez buildu, bez npm
+		stagesBlock = `
+  # ── Wdrożenie ─────────────────────────────────────────────────────────────
+  # Dla statycznych projektów HTML nie ma etapu budowania.
+  # Netlify/Vercel automatycznie wykrywa i serwuje pliki statyczne.
+  - name: deploy
+    type: deploy
 
-	dbBlock := fmt.Sprintf(`provider: "%s"`, dbProv)
-	if dbProv == "" || dbProv == DBProviderNone {
-		dbBlock = `provider: "none"`
+  # ── Sprawdzenie zdrowia aplikacji ─────────────────────────────────────────
+  - name: health
+    type: health
+    allow_failure: true
+`
+	case "python":
+		stagesBlock = fmt.Sprintf(`
+  # ── Instalacja zależności Python ──────────────────────────────────────────
+  - name: install
+    run: pip install -r requirements.txt
+    allow_failure: true
+
+  # ── Testy ─────────────────────────────────────────────────────────────────
+  - name: test
+    run: python -m pytest --tb=short
+    allow_failure: true
+%s
+  # ── Wdrożenie ─────────────────────────────────────────────────────────────
+  - name: deploy
+    type: deploy
+
+  # ── Sprawdzenie zdrowia aplikacji ─────────────────────────────────────────
+  - name: health
+    type: health
+    allow_failure: true
+`, migrateStage)
+	case "custom":
+		stagesBlock = fmt.Sprintf(`
+  # ── WPISZ WŁASNE ETAPY ────────────────────────────────────────────────────
+  # Odkomentuj i dostosuj etapy do swojego projektu.
+
+  # - name: install
+  #   run: make install
+
+  # - name: build
+  #   run: make build
+%s
+  # ── Wdrożenie ─────────────────────────────────────────────────────────────
+  - name: deploy
+    type: deploy
+
+  # ── Sprawdzenie zdrowia aplikacji ─────────────────────────────────────────
+  - name: health
+    type: health
+    allow_failure: true
+`, migrateStage)
+	default: // "npm" i domyślny
+		stagesBlock = fmt.Sprintf(`
+  # ── Instalacja zależności ──────────────────────────────────────────────────
+  - name: install
+    run: npm ci
+
+  # ── Jakość kodu ───────────────────────────────────────────────────────────
+  - name: lint
+    run: npm run lint
+    allow_failure: true
+
+  - name: typecheck
+    run: npx tsc --noEmit
+    allow_failure: true
+
+  # ── Testy ─────────────────────────────────────────────────────────────────
+  - name: test:unit
+    run: npm run test:unit -- --run --passWithNoTests
+    allow_failure: true
+%s
+  # ── Build ─────────────────────────────────────────────────────────────────
+  - name: build
+    run: npm run build
+    artifacts: dist/
+
+  # ── Wdrożenie ─────────────────────────────────────────────────────────────
+  - name: deploy
+    type: deploy
+
+  # ── Sprawdzenie zdrowia aplikacji ─────────────────────────────────────────
+  - name: health
+    type: health
+    allow_failure: true
+`, migrateStage)
 	}
 
 	return fmt.Sprintf(`# ╔══════════════════════════════════════════════════════════════════════════╗
@@ -551,56 +522,23 @@ environments:
     database:
       %s
 
-    env:
-      NODE_ENV: "production"
-
   staging:
     branch: "develop"
     url: ""
     protected: false
 
     deploy:
-      provider: "%s"
-      netlify_prod: false
+      %s
 
     database:
       %s
 
-    env:
-      NODE_ENV: "staging"
-
 stages:
-
-  - name: install
-    run: npm ci
-
-  - name: lint
-    run: npm run lint
-    allow_failure: true
-
-  - name: typecheck
-    run: npx tsc --noEmit
-    allow_failure: true
-
-  - name: test:unit
-    run: npm run test:unit -- --run --passWithNoTests
-    allow_failure: true
-%s
-  - name: build
-    run: npm run build
-    artifacts: dist/
-
-  - name: deploy
-    type: deploy
-
-  - name: health
-    type: health
-    allow_failure: true
-`,
+%s`,
 		projectName, projectName, repo,
 		deployBlock, dbBlock,
-		deployProv, dbBlock,
-		migrateStage,
+		stagingDeployBlock, dbBlock,
+		stagesBlock,
 	)
 }
 

@@ -3,14 +3,14 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║  System Snapshotów Przedwdrożeniowych                               ║
 // ║                                                                      ║
-// ║  Przed KAŻDYM wdrożeniem tworzy deterministyczny punkt przywracania ║
-// ║  w postaci gałęzi backup i taga Git.                                ║
+// ║  Przed KAŻDYM wdrożeniem rejestruje punkt przywracania jako        ║
+// ║  hash commita HEAD (bez tworzenia dodatkowych gałęzi Git).         ║
 // ║                                                                      ║
-// ║  Nazwy są deterministyczne i zawierają środowisko + timestamp:      ║
-// ║    Gałąź: rnr_backup_production_20240115_143000                     ║
-// ║    Tag:   rnr-snap-production-20240115-143000                       ║
+// ║  ZASADA: rnr NIE tworzy dodatkowych gałęzi Git ani nie przełącza  ║
+// ║  ich automatycznie. Zarządzanie gałęziami należy do dewelopera.   ║
 // ║                                                                      ║
-// ║  Snapshot chroni przed utratą kodu przy wadliwym wdrożeniu.         ║
+// ║  Rollback przywraca kod do zapisanego hash commita bez zmiany      ║
+// ║  bieżącej gałęzi.                                                   ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 package gitops
@@ -22,122 +22,73 @@ import (
 
 // ─── Typy ──────────────────────────────────────────────────────────────────
 
-// SnapshotResult zawiera informacje o utworzonym snapshocie.
+// SnapshotResult zawiera informacje o zarejestrowanym punkcie przywracania.
 type SnapshotResult struct {
-	// Branch — nazwa gałęzi backup.
+	// Branch — bieżąca gałąź w momencie snapshotu (tylko informacyjnie).
 	Branch string
-	// Tag — nazwa taga Git.
+	// Tag — pusty (zachowany dla kompatybilności).
 	Tag string
-	// CommitHash — hash commita wskazywanego przez snapshot.
+	// CommitHash — hash HEAD commita — właściwy punkt przywracania.
 	CommitHash string
-	// CreatedAt — czas utworzenia snapshotu.
+	// CreatedAt — czas zarejestrowania snapshotu.
 	CreatedAt time.Time
 }
 
-// ─── Tworzenie Snapshotu ───────────────────────────────────────────────────
+// ─── Snapshot ────────────────────────────────────────────────────────────
 
-// CreateSnapshot tworzy deterministyczny snapshot przedwdrożeniowy.
-// Tworzy zarówno gałąź backup jak i tag Git wskazujący na aktualny HEAD.
-// Bezpieczne do wielokrotnego wywołania — sprawdza czy snapshot już istnieje.
+// CreateSnapshot rejestruje hash aktualnego HEAD jako punkt przywracania.
+//
+// Celowo NIE tworzy dodatkowych gałęzi Git ani tagów.
+// rnr zarządza snapshotami wyłącznie przez plik .rnr/snapshots/state.json.
+//
+// Jeśli katalog nie jest repozytorium Git, snapshot zwraca pusty hash
+// i nie blokuje wdrożenia (np. dla projektów statycznych bez Git).
 func CreateSnapshot(workdir, env string) (*SnapshotResult, error) {
 	now := time.Now()
 
-	branch := formatSnapshotBranch(env, now)
-	tag := formatSnapshotTag(env, now)
+	// Pobierz bieżącą gałąź (informacyjnie)
+	branch, _ := GetCurrentBranch(workdir)
 
-	// Pobierz aktualny hash HEAD
+	// Pobierz hash HEAD — to jest właściwy snapshot
 	commitHash, err := GetCommitHash(workdir, "HEAD")
 	if err != nil {
-		return nil, fmt.Errorf("nie można odczytać HEAD: %w", err)
-	}
-
-	// Utwórz gałąź backup
-	if err := createBackupBranch(workdir, branch, commitHash); err != nil {
-		return nil, fmt.Errorf("nie można utworzyć gałęzi backup %s: %w", branch, err)
-	}
-
-	// Utwórz tag
-	if err := createBackupTag(workdir, tag, commitHash, env); err != nil {
-		// Tag jest opcjonalny — nie przerywamy przy błędzie
-		_ = err
+		// Brak git repo lub brak commitów — nie blokuj wdrożenia
+		commitHash = ""
 	}
 
 	return &SnapshotResult{
 		Branch:     branch,
-		Tag:        tag,
+		Tag:        "",
 		CommitHash: commitHash,
 		CreatedAt:  now,
 	}, nil
 }
 
-// createBackupBranch tworzy nową gałąź wskazującą na podany commit.
-func createBackupBranch(workdir, branch, commitHash string) error {
-	// Sprawdź czy gałąź już istnieje
-	exists, err := BranchExists(workdir, branch)
-	if err != nil {
-		return err
+// RecordSnapshot tworzy snapshot bez wymagania repozytorium Git.
+// Używany gdy projekt nie korzysta z Git (np. HTML bez historii).
+func RecordSnapshot(workdir, env string) *SnapshotResult {
+	snap, _ := CreateSnapshot(workdir, env)
+	if snap == nil {
+		return &SnapshotResult{
+			Branch:    env,
+			CreatedAt: time.Now(),
+		}
 	}
-	if exists {
-		return nil // Snapshot już istnieje — idempotentne
-	}
-
-	_, err = runGit(workdir, "branch", branch, commitHash)
-	return err
-}
-
-// createBackupTag tworzy anotowany tag wskazujący na podany commit.
-func createBackupTag(workdir, tag, commitHash, env string) error {
-	exists, err := TagExists(workdir, tag)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	message := fmt.Sprintf("Snapshot rnr przed wdrożeniem na %s", env)
-	_, err = runGit(workdir, "tag", "-a", tag, commitHash, "-m", message)
-	return err
+	return snap
 }
 
 // ─── Cleanup Snapshotów ───────────────────────────────────────────────────
 
-// PruneOldSnapshots usuwa stare gałęzie backup (starsze niż maxKeep ostatnich).
-// Chroni repozytorium przed zaśmiecaniem przez stare snapshoty.
-func PruneOldSnapshots(workdir, env string, maxKeep int) error {
-	// Pobierz listę gałęzi backup dla środowiska
-	prefix := fmt.Sprintf("rnr_backup_%s_", env)
-	out, err := runGit(workdir, "branch", "--list", prefix+"*", "--sort=-creatordate")
-	if err != nil {
-		return fmt.Errorf("nie można listować gałęzi: %w", err)
-	}
-
-	var branches []string
-	for _, line := range splitLines(out) {
-		b := trimBranchName(line)
-		if b != "" {
-			branches = append(branches, b)
-		}
-	}
-
-	// Usuń stare gałęzie (zachowaj maxKeep najnowszych)
-	if len(branches) <= maxKeep {
-		return nil
-	}
-
-	for _, branch := range branches[maxKeep:] {
-		if _, err := runGit(workdir, "branch", "-D", branch); err != nil {
-			// Nie przerywaj przy błędzie czyszczenia — to operacja niekriytyczna
-			continue
-		}
-	}
+// PruneOldSnapshots — zachowane dla kompatybilności, nie robi nic
+// (snapshoty są teraz zarządzane przez state.json, nie gałęzie Git).
+func PruneOldSnapshots(_ string, _ string, _ int) error {
 	return nil
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 func formatSnapshotBranch(env string, t time.Time) string {
-	return fmt.Sprintf("rnr_backup_%s_%s", env, t.Format("20060102_150405"))
+	return fmt.Sprintf("rnr_snap_%s_%s", env, t.Format("20060102_150405"))
 }
 
 func formatSnapshotTag(env string, t time.Time) string {

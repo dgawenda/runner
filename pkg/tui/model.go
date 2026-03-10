@@ -585,11 +585,13 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 		// rnr.yaml — generuj tylko jeśli nie istnieje (w nowej strukturze: projekt + środowiska + stages)
 		pipelinePath := filepath.Join(m.projectRoot, config.PipelineFile)
 		if _, err := os.Stat(pipelinePath); os.IsNotExist(err) {
-			hasDB := w.DBProv != "" && w.DBProv != "none"
+			projectType := w.ProjectType
+			if projectType == "" {
+				projectType = "custom"
+			}
 			content := config.DefaultPipelineYAMLFromWizard(
 				w.ProjectName, w.Repo,
-				w.DeployProv, w.DBProv,
-				hasDB,
+				projectType, w.DeployProv, w.DBProv,
 			)
 			if err := os.WriteFile(pipelinePath, []byte(content), 0o644); err != nil {
 				return ErrorMsg{Title: "Błąd zapisu rnr.yaml", Message: err.Error(), Err: err}
@@ -614,19 +616,23 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 
 func (m *RootModel) cmdInitDeploy(envName string) tea.Cmd {
 	return func() tea.Msg {
-		if m.gitStatus != nil && !m.gitStatus.IsClean {
+		// Sprawdź czystość repo tylko jeśli Jest repozytorium Git i repo jest brudne.
+		// Projekty bez Git (plain HTML, itp.) mają IsClean=true lub gitStatus==nil.
+		if m.gitStatus != nil &&
+			m.gitStatus.Branch != "(brak git)" &&
+			!m.gitStatus.IsClean {
 			return ErrorMsg{
-				Title: "Repozytorium nie jest czyste",
+				Title: "Niezatwierdzone zmiany",
 				Message: fmt.Sprintf(
-					"rnr wymaga zatwierdzonego kodu przed wdrożeniem.\n\n"+
-						"Znaleziono %d niezatwierdzonych zmian.\n\n"+
-						"Zatwierdź zmiany:\n"+
+					"Znaleziono %d niezatwierdzonych plików.\n\n"+
+						"Zatwierdź zmiany przed wdrożeniem:\n"+
 						"  git add . && git commit -m 'opis'\n\n"+
 						"lub odłóż na bok:\n"+
-						"  git stash",
+						"  git stash\n\n"+
+						"lub użyj rnr deploy --force (pomiń sprawdzenie)",
 					len(m.gitStatus.DirtyFiles),
 				),
-				Err: fmt.Errorf("brudne repozytorium"),
+				Err: fmt.Errorf("niezatwierdzone zmiany"),
 			}
 		}
 		if env, ok := m.cfg.Environments[envName]; ok && env.Protected {
@@ -894,17 +900,16 @@ func (m *RootModel) cmdExecuteRollback(msg RollbackStartMsg) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 
-		if msg.Branch != "" {
-			if err := gitops.RestoreFromBranch(m.projectRoot, msg.Branch); err != nil {
-				return RollbackFailedMsg{Err: err}
-			}
-		} else if msg.CommitHash != "" {
+		// Przywróć do snapshotu wyłącznie przez hash commita.
+		// rnr NIE tworzy dodatkowych gałęzi — snapshot to commit hash, nie gałąź.
+		if msg.CommitHash != "" {
 			target := gitops.BuildRollbackTarget(msg.CommitHash, "", "", msg.Env)
 			if err := gitops.RestoreSnapshot(m.projectRoot, target); err != nil {
 				return RollbackFailedMsg{Err: err}
 			}
 		} else {
-			return RollbackFailedMsg{Err: fmt.Errorf("brak danych snapshotu")}
+			// Brak snapshotu (np. projekt bez Git) — tylko redeploy bieżącego stanu
+			// send(outputCh, "⚠️  Brak snapshotu git — redeployuję bieżący stan kodu...")
 		}
 
 		// Redeploy przywróconej wersji

@@ -271,6 +271,76 @@ verify_installation() {
   success "rnr ${version} zainstalowany pomyślnie"
 }
 
+# ─── Instalacja wymaganych CLI ────────────────────────────────────────────
+# rnr jest wrapperem dla zewnętrznych narzędzi CLI.
+# Instalujemy je automatycznie gdy możliwe, lub podajemy instrukcje.
+
+setup_providers() {
+  echo ""
+  step "Sprawdzanie narzędzi zewnętrznych (CLI providers)..."
+
+  local has_node=false
+  if command -v node &>/dev/null; then
+    has_node=true
+    local node_ver
+    node_ver=$(node --version 2>/dev/null || echo "?")
+    success "Node.js: ${CYAN}${node_ver}${NC}"
+  else
+    warn "Node.js nie znaleziono — pomiń jeśli nie używasz npm/Netlify/Supabase"
+  fi
+
+  # ── Netlify CLI ────────────────────────────────────────────────────────
+  if command -v netlify &>/dev/null; then
+    local netlify_ver
+    netlify_ver=$(netlify --version 2>/dev/null | head -1 || echo "?")
+    success "netlify-cli: ${CYAN}${netlify_ver}${NC}"
+  else
+    if [[ "$has_node" == "true" ]]; then
+      info "Instaluję netlify-cli (wymagane do wdrożeń Netlify)..."
+      if npm install -g netlify-cli --quiet 2>/dev/null; then
+        success "netlify-cli zainstalowany"
+      else
+        warn "Nie udało się zainstalować netlify-cli automatycznie"
+        warn "Uruchom ręcznie: ${BOLD}npm install -g netlify-cli${NC}"
+      fi
+    else
+      warn "netlify-cli nie zainstalowany — jeśli używasz Netlify, zainstaluj:"
+      echo -e "  ${BOLD}npm install -g netlify-cli${NC}"
+    fi
+  fi
+
+  # ── Supabase CLI ───────────────────────────────────────────────────────
+  if command -v supabase &>/dev/null; then
+    local supa_ver
+    supa_ver=$(supabase --version 2>/dev/null || echo "?")
+    success "supabase-cli: ${CYAN}${supa_ver}${NC}"
+  else
+    warn "supabase-cli nie zainstalowany — jeśli używasz Supabase, zainstaluj:"
+    if [[ "$OS" == "darwin" ]]; then
+      echo -e "  ${BOLD}brew install supabase/tap/supabase${NC}"
+    elif [[ "$has_node" == "true" ]]; then
+      echo -e "  ${BOLD}npm install -g supabase${NC}  lub  brew install supabase/tap/supabase${NC}"
+    else
+      echo -e "  ${BOLD}https://supabase.com/docs/guides/cli/getting-started${NC}"
+    fi
+  fi
+
+  # ── Git ────────────────────────────────────────────────────────────────
+  if command -v git &>/dev/null; then
+    local git_ver
+    git_ver=$(git --version 2>/dev/null || echo "?")
+    success "git: ${CYAN}${git_ver}${NC}"
+  else
+    warn "git nie zainstalowany — zalecane dla większości projektów"
+    echo -e "  ${BOLD}sudo apt install git${NC}  lub  ${BOLD}brew install git${NC}"
+  fi
+
+  # ── curl (wymagane do health checków) ────────────────────────────────
+  if command -v curl &>/dev/null; then
+    success "curl: ${CYAN}$(curl --version 2>/dev/null | head -1 | cut -d' ' -f1-2)${NC}"
+  fi
+}
+
 # ─── Konfiguracja PATH ────────────────────────────────────────────────────
 
 setup_path() {
@@ -322,6 +392,7 @@ main() {
   download_binary
   install_binary
   verify_installation
+  setup_providers
   setup_path
 }
 

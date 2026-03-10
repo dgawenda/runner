@@ -176,6 +176,9 @@ type ConfirmRollbackMsg struct {
 type WizardCompleteMsg struct {
 	ProjectName      string
 	Repo             string
+	// ProjectType określa typ projektu: "html", "npm", "custom"
+	// Wpływa na generowane etapy pipeline w rnr.yaml.
+	ProjectType      string
 	DeployProv       string
 	NetlifyToken     string
 	NetlifySiteID    string

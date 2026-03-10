@@ -27,6 +27,7 @@ const (
 	wizardStepWelcome WizardStep = iota
 	wizardStepProjectName
 	wizardStepRepo
+	wizardStepProjectType    // HTML/npm/custom — wpływa na generowane stage'y
 	wizardStepDeployProvider
 	wizardStepNetlifyToken
 	wizardStepNetlifySiteMode // Czy masz już site? Wybierz: istniejący / utwórz nowy
@@ -41,10 +42,18 @@ const (
 
 // DeployProviderChoice to wybór dostawcy wdrożenia w wizardzie.
 type DeployProviderChoice struct {
-	Label    string
-	Value    string
-	Emoji    string
-	Desc     string
+	Label string
+	Value string
+	Emoji string
+	Desc  string
+}
+
+// projectTypeChoices — typ projektu determinuje generowane etapy pipeline.
+var projectTypeChoices = []DeployProviderChoice{
+	{"Statyczny HTML/CSS", "html", "🌐", "Tylko pliki HTML — bez budowania, bez npm"},
+	{"Node.js / npm", "npm", "📦", "React, Vue, Next.js, Vite — wymaga npm"},
+	{"Python / inne", "python", "🐍", "Dowolny projekt z własnym skryptem build"},
+	{"Custom (własne komendy)", "custom", "⚙️ ", "Ręcznie zdefiniujesz etapy w rnr.yaml"},
 }
 
 var deployProviders = []DeployProviderChoice{
@@ -84,21 +93,23 @@ type WizardModel struct {
 	activeInput   int
 
 	// Wybory dostawców
-	deployChoice        int
-	dbChoice            int
+	projectTypeChoice     int // indeks w projectTypeChoices
+	deployChoice          int
+	dbChoice              int
 	netlifySiteModeChoice int // 0 = istniejący, 1 = utwórz nowy
 
 	// Zebrane dane
 	projectName      string
 	repo             string
+	projectType      string // "html", "npm", "python", "custom"
 	deployProv       string
 	netlifyToken     string
 	netlifySiteID    string
 	netlifyCreateNew bool // true = rnr sam tworzy projekt na Netlify
 	dbProv           string
-	supabaseRef   string
-	supabaseURL   string
-	supabaseKey   string
+	supabaseRef      string
+	supabaseURL      string
+	supabaseKey      string
 
 	// Tryb "fresh clone" — rnr.yaml istnieje, brak conf
 	hasExistingConf bool
@@ -216,7 +227,9 @@ func (m WizardModel) View() string {
 			"Będzie wyświetlana w Dashboard i logach wdrożeń.")
 	case wizardStepRepo:
 		return m.viewInput(1, "Repozytorium GitHub", "Podaj repozytorium w formacie owner/repo",
-			"Np. 'mojafirma/moj-projekt'. Używane do releasów i tagów.")
+			"Np. 'mojafirma/moj-projekt'. Używane do releasów.\nMożesz pominąć (zostaw puste) jeśli nie korzystasz z GitHub.")
+	case wizardStepProjectType:
+		return m.viewProviderChoice("Typ projektu", projectTypeChoices, m.projectTypeChoice)
 	case wizardStepDeployProvider:
 		return m.viewProviderChoice("Dostawca wdrożenia", deployProviders, m.deployChoice)
 	case wizardStepNetlifyToken:
@@ -414,15 +427,29 @@ func (m WizardModel) viewReview() string {
 		}
 	}
 
+	projectTypeName := m.projectType
+	for _, pt := range projectTypeChoices {
+		if pt.Value == m.projectType {
+			projectTypeName = pt.Emoji + " " + pt.Label
+			break
+		}
+	}
+	if projectTypeName == "" {
+		projectTypeName = "custom"
+	}
+
 	rows := []string{
 		row("Projekt", m.projectName),
 		row("Repozytorium", m.repo),
+		row("Typ projektu", projectTypeName),
 		row("Dostawca deploy", deployProv),
 	}
 	if netlifyMode != "" {
 		rows = append(rows, row("Netlify projekt", netlifyMode))
 	}
-	rows = append(rows, row("Dostawca bazy", dbProv))
+	if m.projectType != "html" {
+		rows = append(rows, row("Dostawca bazy", dbProv))
+	}
 
 	summary := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
@@ -479,7 +506,11 @@ func (m WizardModel) handleKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
 		return m.advance()
 
 	case tea.KeyUp:
-		if m.step == wizardStepDeployProvider {
+		if m.step == wizardStepProjectType {
+			if m.projectTypeChoice > 0 {
+				m.projectTypeChoice--
+			}
+		} else if m.step == wizardStepDeployProvider {
 			if m.deployChoice > 0 {
 				m.deployChoice--
 			}
@@ -495,7 +526,11 @@ func (m WizardModel) handleKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyDown:
-		if m.step == wizardStepDeployProvider {
+		if m.step == wizardStepProjectType {
+			if m.projectTypeChoice < len(projectTypeChoices)-1 {
+				m.projectTypeChoice++
+			}
+		} else if m.step == wizardStepDeployProvider {
 			if m.deployChoice < len(deployProviders)-1 {
 				m.deployChoice++
 			}
@@ -539,6 +574,10 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 
 	case wizardStepRepo:
 		m.repo = strings.TrimSpace(m.inputs[1].Value())
+		m.step = wizardStepProjectType
+
+	case wizardStepProjectType:
+		m.projectType = projectTypeChoices[m.projectTypeChoice].Value
 		m.step = wizardStepDeployProvider
 
 	case wizardStepDeployProvider:
@@ -546,6 +585,10 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 		if m.deployProv == "netlify" {
 			m.step = wizardStepNetlifyToken
 			m.inputs[2].Focus()
+		} else if m.projectType == "html" {
+			// HTML bez netlify nie ma DB — idź do review
+			m.dbProv = "none"
+			m.step = wizardStepReview
 		} else {
 			m.step = wizardStepDBProvider
 		}
@@ -556,10 +599,16 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 
 	case wizardStepNetlifySiteMode:
 		choice := netlifySiteModes[m.netlifySiteModeChoice].Value
+		nextStep := wizardStepDBProvider
+		if m.projectType == "html" {
+			// HTML nie ma bazy — pomijamy DB
+			m.dbProv = "none"
+			nextStep = wizardStepReview
+		}
 		if choice == "create" {
 			m.netlifyCreateNew = true
 			m.netlifySiteID = ""
-			m.step = wizardStepDBProvider // pomijamy wpisywanie Site ID
+			m.step = nextStep
 		} else {
 			m.netlifyCreateNew = false
 			m.step = wizardStepNetlifySiteID
@@ -568,13 +617,22 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 
 	case wizardStepNetlifySiteID:
 		m.netlifySiteID = m.inputs[3].Value()
-		m.step = wizardStepDBProvider
+		// Projekty HTML nie mają bazy danych — pomijamy krok DB
+		if m.projectType == "html" {
+			m.dbProv = "none"
+			m.step = wizardStepReview
+		} else {
+			m.step = wizardStepDBProvider
+		}
 
 	case wizardStepDBProvider:
 		m.dbProv = dbProviders[m.dbChoice].Value
 		if m.dbProv == "supabase" {
 			m.step = wizardStepSupabaseRef
 			m.inputs[4].Focus()
+		} else if m.dbProv == "prisma" {
+			// Prisma wymaga tylko db_url, ale to jest w conf — idź do review
+			m.step = wizardStepReview
 		} else {
 			m.step = wizardStepReview
 		}
@@ -599,6 +657,7 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 			return WizardCompleteMsg{
 				ProjectName:      m.projectName,
 				Repo:             m.repo,
+				ProjectType:      m.projectType,
 				DeployProv:       m.deployProv,
 				NetlifyToken:     m.netlifyToken,
 				NetlifySiteID:    m.netlifySiteID,

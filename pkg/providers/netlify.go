@@ -4,10 +4,11 @@
 // ║  Dostawca Netlify CLI                                               ║
 // ║                                                                      ║
 // ║  Wrapper dla oficjalnego Netlify CLI (netlify-cli).                 ║
-// ║  Automatycznie przekazuje:                                          ║
-// ║    · NETLIFY_AUTH_TOKEN jako zmienną środowiskową                   ║
-// ║    · --site flaga z netlify_site_id                                 ║
-// ║    · --prod jeśli netlify_prod: true                                ║
+// ║  Przed pierwszym użyciem sprawdza czy netlify-cli jest w PATH —    ║
+// ║  jeśli brak, wyświetla czytelną instrukcję instalacji.             ║
+// ║                                                                      ║
+// ║  Tworzenie nowych projektów Netlify ODBYWA SIĘ PRZEZ REST API      ║
+// ║  (bez CLI) — wystarczy token autoryzacji.                           ║
 // ║                                                                      ║
 // ║  Token jest ZAWSZE maskowany w logach i wyjściu TUI.                ║
 // ╚══════════════════════════════════════════════════════════════════════╝
@@ -16,13 +17,17 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/neution/rnr/pkg/config"
 	"github.com/neution/rnr/pkg/logger"
 )
+
+const netlifyInstallHint = "npm install -g netlify-cli\n  lub: yarn global add netlify-cli"
 
 // netlifyProvider implementuje DeployProvider dla Netlify.
 type netlifyProvider struct {
@@ -39,35 +44,50 @@ func (p *netlifyProvider) Name() string { return "Netlify" }
 
 // Deploy wdraża aplikację używając Netlify CLI.
 // Komenda: netlify deploy [--prod] --site <SITE_ID> --dir <artifacts>
+//
+// Wymagania:
+//   - netlify-cli zainstalowany globalnie (npm install -g netlify-cli)
+//   - netlify_auth_token w rnr.conf.yaml
+//   - netlify_site_id w rnr.conf.yaml (lub netlify_create_new: true)
 func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, outputCh chan<- string) error {
 	d := env.Deploy
 
 	if d.NetlifyAuthToken == "" {
-		return fmt.Errorf("brak netlify_auth_token — uzupełnij w rnr.conf.yaml")
+		return fmt.Errorf("brak netlify_auth_token — uzupełnij w rnr.conf.yaml → environments.X.deploy.netlify_auth_token")
 	}
 
-	// ── Tryb: utwórz nowy projekt ────────────────────────────────────────
+	// ── Tryb: utwórz nowy projekt przez Netlify REST API ────────────────
 	if d.NetlifyCreateNew && d.NetlifySiteID == "" {
-		siteID, err := p.createSite(ctx, env, outputCh)
+		siteID, err := p.createSiteViaAPI(d.NetlifyAuthToken, outputCh)
 		if err != nil {
 			return err
 		}
-		// Zapamiętaj wygenerowany site ID na czas sesji
 		d.NetlifySiteID = siteID
-		send(outputCh, fmt.Sprintf("📌 Netlify Site ID: %s — zapisz go w rnr.conf.yaml → netlify_site_id", siteID))
+		send(outputCh, fmt.Sprintf("📌 ZAPAMIĘTAJ → Site ID: %s — wpisz go w rnr.conf.yaml → environments.X.deploy.netlify_site_id", siteID))
 	}
 
 	if d.NetlifySiteID == "" {
-		return fmt.Errorf("brak netlify_site_id — wpisz go w rnr.conf.yaml lub wybierz opcję 'Utwórz nowy projekt' w Setup Wizard")
+		return fmt.Errorf(
+			"brak netlify_site_id\n\n" +
+				"Opcje:\n" +
+				"  1. Wpisz Site ID w rnr.conf.yaml → environments.X.deploy.netlify_site_id\n" +
+				"     (znajdziesz go w Netlify → Site settings → General → Site ID)\n" +
+				"  2. Ustaw netlify_create_new: true aby rnr automatycznie założył projekt",
+		)
+	}
+
+	// ── Sprawdź czy netlify-cli jest zainstalowany ───────────────────────
+	if err := checkCLI("netlify", netlifyInstallHint); err != nil {
+		return err
 	}
 
 	// Buduj argumenty komendy
-	args := []string{"deploy", "--site", d.NetlifySiteID, "--json"}
+	args := []string{"deploy", "--site", d.NetlifySiteID}
 	if d.NetlifyProd {
 		args = append(args, "--prod")
 		send(outputCh, "🚀 Netlify: wdrożenie na PRODUKCJĘ (--prod)")
 	} else {
-		send(outputCh, "🔍 Netlify: wdrożenie podglądu (bez --prod)")
+		send(outputCh, "🔍 Netlify: wdrożenie podglądu (preview deploy)")
 	}
 
 	// Zmienne środowiskowe dla Netlify CLI
@@ -87,67 +107,60 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	return nil
 }
 
-// createSite tworzy nowy projekt na Netlify używając `netlify sites:create`.
-// Parsuje wynik i zwraca Site ID nowo utworzonego projektu.
-func (p *netlifyProvider) createSite(ctx context.Context, env config.Environment, outputCh chan<- string) (string, error) {
-	d := env.Deploy
-	send(outputCh, "✨ Netlify: tworzenie nowego projektu...")
+// createSiteViaAPI tworzy nowy projekt Netlify przez REST API (bez CLI!).
+// Wystarczy token — nie wymaga zainstalowanego netlify-cli.
+func (p *netlifyProvider) createSiteViaAPI(token string, outputCh chan<- string) (string, error) {
+	send(outputCh, "✨ Netlify: tworzenie nowego projektu przez API...")
 
-	envVars := mergeEnv(env.Env, map[string]string{
-		"NETLIFY_AUTH_TOKEN": d.NetlifyAuthToken,
-	})
+	req, err := http.NewRequest("POST", "https://api.netlify.com/api/v1/sites", strings.NewReader("{}"))
+	if err != nil {
+		return "", fmt.Errorf("błąd tworzenia zapytania do Netlify API: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 
-	runner := NewRunner(".", p.masker, p.log)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("błąd połączenia z Netlify API: %w", err)
+	}
+	defer resp.Body.Close()
 
-	// Zbieramy surowy output, żeby wyłuskać Site ID
-	var rawOutput strings.Builder
-	captureCh := make(chan string, 64)
-	go func() {
-		for line := range captureCh {
-			rawOutput.WriteString(line + "\n")
-			send(outputCh, line) // przekaż też do TUI
-		}
-	}()
-
-	result := runner.RunCommand(ctx, "netlify",
-		[]string{"sites:create", "--json"},
-		envVars, captureCh)
-	close(captureCh)
-
-	if result.Error != nil {
-		return "", fmt.Errorf("netlify sites:create nieudany: %w", result.Error)
+	if resp.StatusCode == 401 {
+		return "", fmt.Errorf("nieautoryzowany dostęp do Netlify API — sprawdź netlify_auth_token")
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("Netlify API zwróciło błąd HTTP %d — sprawdź token i spróbuj ponownie", resp.StatusCode)
 	}
 
-	// Wyłuskaj Site ID z JSON lub z tekstu odpowiedzi CLI
-	// Netlify CLI zwraca np.: "Site ID:   abc123-xxxx-..."
-	siteID := extractNetlifySiteID(rawOutput.String())
-	if siteID == "" {
-		return "", fmt.Errorf("nie udało się wyłuskać Site ID z odpowiedzi Netlify CLI.\n"+
-			"Sprawdź ręcznie w https://app.netlify.com i wpisz site_id w rnr.conf.yaml.\n"+
-			"Odpowiedź CLI:\n%s", rawOutput.String())
+	var result struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("błąd parsowania odpowiedzi Netlify API: %w", err)
+	}
+	if result.ID == "" {
+		return "", fmt.Errorf("Netlify API nie zwróciło Site ID — sprawdź token i spróbuj ponownie")
 	}
 
-	send(outputCh, fmt.Sprintf("✅ Netlify: projekt utworzony (Site ID: %s)", siteID))
-	return siteID, nil
+	send(outputCh, fmt.Sprintf("✅ Nowy projekt Netlify: %s (URL: %s)", result.Name, result.URL))
+	return result.ID, nil
 }
 
-// Rollback dla Netlify — redeployuje poprzednią wersję.
-// Netlify automatycznie obsługuje historię deployów; ten rollback
-// realizowany jest przez git reset + ponowny deploy (patrz model rollbacku).
+// Rollback dla Netlify — redeployuje przywróconą wersję kodu.
 func (p *netlifyProvider) Rollback(ctx context.Context, env config.Environment, outputCh chan<- string) error {
 	send(outputCh, "↩️  Netlify: ponowne wdrożenie przywróconej wersji...")
 	return p.Deploy(ctx, env, outputCh)
 }
 
 // extractNetlifySiteID wyłuskuje Site ID z wyjścia `netlify sites:create`.
-// Obsługuje zarówno format JSON (`"id": "..."`) jak i tekstowy (`Site ID: ...`).
+// Zachowane dla kompatybilności wstecznej.
 func extractNetlifySiteID(output string) string {
-	// Próba 1: JSON — "id": "abc123"
 	reJSON := regexp.MustCompile(`"id"\s*:\s*"([a-f0-9\-]{20,})"`)
 	if m := reJSON.FindStringSubmatch(output); len(m) == 2 {
 		return m[1]
 	}
-	// Próba 2: tekst CLI — "Site ID:   abc123"
 	reText := regexp.MustCompile(`(?i)site\s+id[:\s]+([a-f0-9\-]{20,})`)
 	if m := reText.FindStringSubmatch(output); len(m) == 2 {
 		return strings.TrimSpace(m[1])
@@ -156,6 +169,8 @@ func extractNetlifySiteID(output string) string {
 }
 
 // ─── Vercel Provider ──────────────────────────────────────────────────────
+
+const vercelInstallHint = "npm install -g vercel\n  lub: yarn global add vercel"
 
 type vercelProvider struct {
 	masker *logger.Masker
@@ -173,10 +188,14 @@ func (p *vercelProvider) Deploy(ctx context.Context, env config.Environment, out
 	d := env.Deploy
 
 	if d.VercelToken == "" {
-		return fmt.Errorf("brak vercel_token — uzupełnij w rnr.conf.yaml")
+		return fmt.Errorf("brak vercel_token — uzupełnij w rnr.conf.yaml → environments.X.deploy.vercel_token")
 	}
 
-	args := []string{"deploy", "--token", d.VercelToken}
+	if err := checkCLI("vercel", vercelInstallHint); err != nil {
+		return err
+	}
+
+	args := []string{"deploy", "--token", d.VercelToken, "--yes"}
 
 	if d.VercelOrgID != "" {
 		args = append(args, "--scope", d.VercelOrgID)
@@ -228,10 +247,14 @@ func (p *sshProvider) Deploy(ctx context.Context, env config.Environment, output
 	d := env.Deploy
 
 	if d.SSHHost == "" {
-		return fmt.Errorf("brak ssh_host — uzupełnij w rnr.conf.yaml")
+		return fmt.Errorf("brak ssh_host — uzupełnij w rnr.yaml → environments.X.deploy.ssh_host")
 	}
 	if d.SSHUser == "" {
-		return fmt.Errorf("brak ssh_user — uzupełnij w rnr.conf.yaml")
+		return fmt.Errorf("brak ssh_user — uzupełnij w rnr.yaml → environments.X.deploy.ssh_user")
+	}
+
+	if err := checkCLI("rsync", "sudo apt install rsync\n  lub: brew install rsync"); err != nil {
+		return err
 	}
 
 	source := d.SSHSource
@@ -292,13 +315,25 @@ func (p *ghPagesProvider) Deploy(ctx context.Context, env config.Environment, ou
 
 	send(outputCh, fmt.Sprintf("📄 GitHub Pages: publikacja %s na gałąź %s", source, branch))
 
-	// Użyj gh-pages npm package lub git subtree
-	cmd := fmt.Sprintf("npx gh-pages -d %s -b %s", source, branch)
+	if err := checkCLI("git", "Zainstaluj Git: https://git-scm.com"); err != nil {
+		return err
+	}
+
+	// Użyj git subtree push
 	runner := NewRunner(".", p.masker, p.log)
+	cmd := fmt.Sprintf("git subtree push --prefix=%s origin %s", source, branch)
 	result := runner.RunShell(ctx, cmd, env.Env, outputCh)
 
 	if result.Error != nil {
-		return fmt.Errorf("GitHub Pages deploy nieudany: %w", result.Error)
+		// Fallback: npx gh-pages jeśli dostępny
+		send(outputCh, "⚠️  git subtree nieudany, próbuję npx gh-pages...")
+		if checkErr := checkCLI("npx", "npm install -g npx"); checkErr == nil {
+			cmd2 := fmt.Sprintf("npx gh-pages -d %s -b %s", source, branch)
+			result = runner.RunShell(ctx, cmd2, env.Env, outputCh)
+		}
+		if result.Error != nil {
+			return fmt.Errorf("GitHub Pages deploy nieudany: %w", result.Error)
+		}
 	}
 
 	send(outputCh, "✅ GitHub Pages: publikacja zakończona sukcesem")
@@ -328,7 +363,11 @@ func (p *dockerProvider) Deploy(ctx context.Context, env config.Environment, out
 	d := env.Deploy
 
 	if d.DockerImage == "" {
-		return fmt.Errorf("brak docker_image — uzupełnij w rnr.conf.yaml")
+		return fmt.Errorf("brak docker_image — uzupełnij w rnr.yaml → environments.X.deploy.docker_image")
+	}
+
+	if err := checkCLI("docker", "Zainstaluj Docker: https://docs.docker.com/get-docker/"); err != nil {
+		return err
 	}
 
 	tag := d.DockerTag
@@ -399,23 +438,9 @@ func mergeEnv(base, extra map[string]string) map[string]string {
 
 // extractRegistry wyciąga nazwę rejestru z nazwy obrazu Docker.
 func extractRegistry(image string) string {
-	parts := splitString(image, "/")
-	if len(parts) >= 3 {
+	parts := strings.SplitN(image, "/", 3)
+	if len(parts) >= 3 && strings.Contains(parts[0], ".") {
 		return parts[0]
 	}
 	return "docker.io"
-}
-
-// splitString dzieli ciąg po separatorze.
-func splitString(s, sep string) []string {
-	var result []string
-	start := 0
-	for i := 0; i <= len(s)-len(sep); i++ {
-		if s[i:i+len(sep)] == sep {
-			result = append(result, s[start:i])
-			start = i + len(sep)
-		}
-	}
-	result = append(result, s[start:])
-	return result
 }

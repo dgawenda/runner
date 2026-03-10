@@ -17,6 +17,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"os/exec"
 
 	"github.com/neution/rnr/pkg/config"
 	"github.com/neution/rnr/pkg/logger"
@@ -120,6 +121,21 @@ func (n *nopDatabaseProvider) Promote(_ context.Context, _, _ config.Environment
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
+
+// checkCLI sprawdza czy wymagane narzędzie CLI jest dostępne w PATH.
+// Jeśli brak, zwraca czytelny błąd z komendą instalacji.
+// Nie blokuje — wywoływać PRZED pierwszą operacją CLI w każdym providerze.
+func checkCLI(name, installHint string) error {
+	if _, err := exec.LookPath(name); err != nil {
+		return fmt.Errorf(
+			"narzędzie '%s' nie jest zainstalowane lub nie jest w PATH\n\n"+
+				"Instalacja:\n  %s\n\n"+
+				"Po instalacji uruchom wdrożenie ponownie.",
+			name, installHint,
+		)
+	}
+	return nil
+}
 
 // send wysyła linię do kanału bez blokowania.
 func send(ch chan<- string, msg string) {

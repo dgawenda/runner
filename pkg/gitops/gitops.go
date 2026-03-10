@@ -65,12 +65,21 @@ type StatusResult struct {
 // ─── Audyt Repozytorium ────────────────────────────────────────────────────
 
 // AuditRepo przeprowadza pełny audyt repozytorium Git.
-// Jest to obowiązkowa kontrola przed każdym wdrożeniem.
-// Zwraca StatusResult z pełnymi informacjami o stanie repozytorium.
+// Jeśli katalog nie jest repozytorium Git (brak .git), zwraca StatusResult
+// z IsClean=true i pustymi polami — nie blokuje wdrożenia dla projektów bez Git.
 func AuditRepo(workdir string) (*StatusResult, error) {
 	branch, err := GetCurrentBranch(workdir)
 	if err != nil {
-		return nil, fmt.Errorf("nie można odczytać bieżącej gałęzi: %w", err)
+		// Brak repozytorium Git — nie blokuj, zwróć pusty status
+		return &StatusResult{
+			IsClean: true,
+			Branch:  "(brak git)",
+			LastCommit: CommitInfo{
+				Hash:      "",
+				ShortHash: "",
+				Message:   "(brak git — projekt bez repozytorium)",
+			},
+		}, nil
 	}
 
 	dirty, err := getDirtyFiles(workdir)
@@ -80,7 +89,7 @@ func AuditRepo(workdir string) (*StatusResult, error) {
 
 	commit, err := GetLastCommit(workdir)
 	if err != nil {
-		return nil, fmt.Errorf("nie można odczytać ostatniego commita: %w", err)
+		commit = &CommitInfo{Message: "(brak commitów)"}
 	}
 
 	return &StatusResult{
