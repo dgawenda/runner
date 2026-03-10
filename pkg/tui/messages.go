@@ -237,3 +237,21 @@ type GitCommitDoneMsg struct {
 	Hash string // skrócony hash nowego commita
 	Err  error
 }
+
+// GitGraphLoadedMsg — linie wizualnego grafu commitów (git log --graph).
+type GitGraphLoadedMsg struct {
+	Lines []string
+	Err   error
+}
+
+// GitDiffRequestMsg — żądanie załadowania diffa pliku (z git panelu → root model).
+type GitDiffRequestMsg struct {
+	File string
+}
+
+// GitDiffLoadedMsg — zawartość diffa dla wybranego pliku.
+type GitDiffLoadedMsg struct {
+	File  string
+	Lines []string
+	Err   error
+}

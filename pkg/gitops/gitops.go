@@ -381,6 +381,62 @@ func GetCommitHistory(workdir string, n int) ([]CommitInfo, error) {
 	return commits, nil
 }
 
+// GetGraphLog zwraca linie grafu commitów (git log --graph) dla wszystkich gałęzi.
+// Używa surowego wyjścia bez kolorów ANSI — kolorowanie odbywa się w warstwie TUI.
+// Parametr n określa maksymalną liczbę commitów (nie linii grafu).
+func GetGraphLog(workdir string, n int) ([]string, error) {
+	if n <= 0 {
+		n = 60
+	}
+	out, err := runGit(workdir,
+		"log",
+		"--graph",
+		"--oneline",
+		"--decorate",
+		"--all",
+		"--color=never",
+		fmt.Sprintf("-n%d", n),
+	)
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		// Zachowaj puste linie — są częścią rysowania grafu
+		lines = append(lines, l)
+	}
+	// Usuń ostatnią pustą linię jeśli istnieje
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines, nil
+}
+
+// GetFileDiff zwraca linie diff dla podanego pliku.
+// Próbuje kolejno: diff HEAD, diff --staged, diff (working tree).
+// Dla plików nieśledzonych (untracked) zwraca zawartość pliku jako diff "+".
+func GetFileDiff(workdir, file string) ([]string, error) {
+	// Próba 1: diff HEAD (staged + unstaged vs last commit)
+	out, err := runGit(workdir, "diff", "HEAD", "--", file)
+	if err == nil && strings.TrimSpace(out) != "" {
+		return strings.Split(out, "\n"), nil
+	}
+
+	// Próba 2: staged diff (git add już wykonany)
+	out, err = runGit(workdir, "diff", "--staged", "--", file)
+	if err == nil && strings.TrimSpace(out) != "" {
+		return strings.Split(out, "\n"), nil
+	}
+
+	// Próba 3: working tree (niezaindeksowane zmiany)
+	out, err = runGit(workdir, "diff", "--", file)
+	if err == nil && strings.TrimSpace(out) != "" {
+		return strings.Split(out, "\n"), nil
+	}
+
+	return []string{"(brak różnic do wyświetlenia dla: " + file + ")"}, nil
+}
+
 // ─── Wewnętrzne ───────────────────────────────────────────────────────────
 
 // runGit wykonuje komendę git w podanym katalogu i zwraca stdout.

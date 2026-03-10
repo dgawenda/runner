@@ -211,6 +211,10 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == ScreenDashboard || m.screen == ScreenGit {
 			cmds = append(cmds, m.cmdAuditGitSilent())
 		}
+		// Odśwież graf jeśli jesteśmy w Git Panelu
+		if m.screen == ScreenGit {
+			cmds = append(cmds, m.cmdGitLoadGraph())
+		}
 
 	case GitStatusMsg:
 		// Pierwsza inicjalizacja (loading=true) — przejdź do ładowania stanu
@@ -277,6 +281,22 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, gpCmd)
 
 	case GitHistoryLoadedMsg:
+		var gpCmd tea.Cmd
+		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, gpCmd)
+
+	case GitGraphLoadedMsg:
+		// Graf commitów załadowany → przekaż do gitPanel
+		var gpCmd tea.Cmd
+		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, gpCmd)
+
+	case GitDiffRequestMsg:
+		// Żądanie diff pliku z GitPanel → załaduj diff
+		cmds = append(cmds, m.cmdGitLoadDiff(msg.File))
+
+	case GitDiffLoadedMsg:
+		// Diff załadowany → przekaż do gitPanel
 		var gpCmd tea.Cmd
 		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
 		cmds = append(cmds, gpCmd)
@@ -780,7 +800,7 @@ func (m *RootModel) cmdOpenLogs() tea.Cmd {
 	}
 }
 
-// cmdOpenGitPanel otwiera Git Panel i ładuje dane (gałęzie + historia).
+// cmdOpenGitPanel otwiera Git Panel i ładuje dane (gałęzie + historia + graf).
 func (m *RootModel) cmdOpenGitPanel() tea.Cmd {
 	m.gitPanel = NewGitPanelModel(m.width, m.height)
 	m.gitPanel.gitStatus = m.gitStatus
@@ -788,6 +808,7 @@ func (m *RootModel) cmdOpenGitPanel() tea.Cmd {
 	return tea.Batch(
 		m.cmdGitLoadBranches(),
 		m.cmdGitLoadHistory(),
+		m.cmdGitLoadGraph(), // Wczytaj wizualny graf commitów
 	)
 }
 
@@ -837,6 +858,24 @@ func (m *RootModel) cmdGitStageAndCommit(message string) tea.Cmd {
 		}
 		hash, err := gitops.CommitWithMessage(root, message)
 		return GitCommitDoneMsg{Hash: hash, Err: err}
+	}
+}
+
+// cmdGitLoadGraph pobiera linie wizualnego grafu commitów (git log --graph --all).
+func (m *RootModel) cmdGitLoadGraph() tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		lines, err := gitops.GetGraphLog(root, 80)
+		return GitGraphLoadedMsg{Lines: lines, Err: err}
+	}
+}
+
+// cmdGitLoadDiff pobiera diff dla podanego pliku.
+func (m *RootModel) cmdGitLoadDiff(file string) tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		lines, err := gitops.GetFileDiff(root, file)
+		return GitDiffLoadedMsg{File: file, Lines: lines, Err: err}
 	}
 }
 
