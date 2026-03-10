@@ -29,6 +29,7 @@ const (
 	wizardStepRepo
 	wizardStepDeployProvider
 	wizardStepNetlifyToken
+	wizardStepNetlifySiteMode // Czy masz już site? Wybierz: istniejący / utwórz nowy
 	wizardStepNetlifySiteID
 	wizardStepDBProvider
 	wizardStepSupabaseRef
@@ -55,6 +56,12 @@ var deployProviders = []DeployProviderChoice{
 	{"Custom", "custom", "⚙️ ", "Własna komenda deploy"},
 }
 
+// netlifySiteModes — tryb konfiguracji projektu Netlify.
+var netlifySiteModes = []DeployProviderChoice{
+	{"Mam już Site ID", "existing", "🔗", "Wkleję Site ID z panelu Netlify"},
+	{"Utwórz nowy projekt", "create", "✨", "rnr automatycznie założy nowy projekt Netlify"},
+}
+
 var dbProviders = []DeployProviderChoice{
 	{"Supabase", "supabase", "⚡", "BaaS z PostgreSQL (zalecany)"},
 	{"Prisma ORM", "prisma", "🔷", "TypeScript ORM"},
@@ -77,16 +84,18 @@ type WizardModel struct {
 	activeInput   int
 
 	// Wybory dostawców
-	deployChoice  int
-	dbChoice      int
+	deployChoice        int
+	dbChoice            int
+	netlifySiteModeChoice int // 0 = istniejący, 1 = utwórz nowy
 
 	// Zebrane dane
-	projectName   string
-	repo          string
-	deployProv    string
-	netlifyToken  string
-	netlifySiteID string
-	dbProv        string
+	projectName      string
+	repo             string
+	deployProv       string
+	netlifyToken     string
+	netlifySiteID    string
+	netlifyCreateNew bool // true = rnr sam tworzy projekt na Netlify
+	dbProv           string
 	supabaseRef   string
 	supabaseURL   string
 	supabaseKey   string
@@ -203,6 +212,8 @@ func (m WizardModel) View() string {
 	case wizardStepNetlifyToken:
 		return m.viewInput(2, "Token Netlify", "Wklej swój Netlify Auth Token",
 			"Znajdziesz go w Netlify → User Settings → Personal access tokens.\nToken jest MASKOWANY i nigdy nie trafi do logów ani git.")
+	case wizardStepNetlifySiteMode:
+		return m.viewProviderChoice("Projekt Netlify", netlifySiteModes, m.netlifySiteModeChoice)
 	case wizardStepNetlifySiteID:
 		return m.viewInput(3, "Site ID Netlify", "Wklej Site ID swojego projektu",
 			"Znajdziesz go w Netlify → Site settings → General → Site ID.")
@@ -364,12 +375,26 @@ func (m WizardModel) viewReview() string {
 		dbProv = "none"
 	}
 
-	summary := lipgloss.JoinVertical(lipgloss.Left,
+	netlifyMode := ""
+	if deployProv == "netlify" {
+		if m.netlifyCreateNew {
+			netlifyMode = "✨ Utwórz nowy projekt automatycznie"
+		} else if m.netlifySiteID != "" {
+			netlifyMode = "🔗 Site ID: " + m.netlifySiteID
+		}
+	}
+
+	rows := []string{
 		row("Projekt", m.projectName),
 		row("Repozytorium", m.repo),
 		row("Dostawca deploy", deployProv),
-		row("Dostawca bazy", dbProv),
-	)
+	}
+	if netlifyMode != "" {
+		rows = append(rows, row("Netlify projekt", netlifyMode))
+	}
+	rows = append(rows, row("Dostawca bazy", dbProv))
+
+	summary := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 	note := lipgloss.NewStyle().
 		Foreground(ColorSuccess).
@@ -428,6 +453,10 @@ func (m WizardModel) handleKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
 			if m.deployChoice > 0 {
 				m.deployChoice--
 			}
+		} else if m.step == wizardStepNetlifySiteMode {
+			if m.netlifySiteModeChoice > 0 {
+				m.netlifySiteModeChoice--
+			}
 		} else if m.step == wizardStepDBProvider {
 			if m.dbChoice > 0 {
 				m.dbChoice--
@@ -439,6 +468,10 @@ func (m WizardModel) handleKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
 		if m.step == wizardStepDeployProvider {
 			if m.deployChoice < len(deployProviders)-1 {
 				m.deployChoice++
+			}
+		} else if m.step == wizardStepNetlifySiteMode {
+			if m.netlifySiteModeChoice < len(netlifySiteModes)-1 {
+				m.netlifySiteModeChoice++
 			}
 		} else if m.step == wizardStepDBProvider {
 			if m.dbChoice < len(dbProviders)-1 {
@@ -489,8 +522,19 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 
 	case wizardStepNetlifyToken:
 		m.netlifyToken = m.inputs[2].Value()
-		m.step = wizardStepNetlifySiteID
-		m.inputs[3].Focus()
+		m.step = wizardStepNetlifySiteMode
+
+	case wizardStepNetlifySiteMode:
+		choice := netlifySiteModes[m.netlifySiteModeChoice].Value
+		if choice == "create" {
+			m.netlifyCreateNew = true
+			m.netlifySiteID = ""
+			m.step = wizardStepDBProvider // pomijamy wpisywanie Site ID
+		} else {
+			m.netlifyCreateNew = false
+			m.step = wizardStepNetlifySiteID
+			m.inputs[3].Focus()
+		}
 
 	case wizardStepNetlifySiteID:
 		m.netlifySiteID = m.inputs[3].Value()
@@ -523,8 +567,16 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 		m.step = wizardStepDone
 		return m, func() tea.Msg {
 			return WizardCompleteMsg{
-				ProjectName: m.projectName,
-				Repo:        m.repo,
+				ProjectName:      m.projectName,
+				Repo:             m.repo,
+				DeployProv:       m.deployProv,
+				NetlifyToken:     m.netlifyToken,
+				NetlifySiteID:    m.netlifySiteID,
+				NetlifyCreateNew: m.netlifyCreateNew,
+				DBProv:           m.dbProv,
+				SupabaseRef:      m.supabaseRef,
+				SupabaseURL:      m.supabaseURL,
+				SupabaseKey:      m.supabaseKey,
 			}
 		}
 
@@ -560,9 +612,9 @@ func (m WizardModel) currentInputIndex() int {
 }
 
 // WizardData zwraca zebrane dane z wizarda.
-func (m WizardModel) WizardData() (projectName, repo, deployProv, netlifyToken, netlifySiteID, dbProv, supabaseRef, supabaseURL, supabaseKey string) {
+func (m WizardModel) WizardData() (projectName, repo, deployProv, netlifyToken, netlifySiteID string, netlifyCreateNew bool, dbProv, supabaseRef, supabaseURL, supabaseKey string) {
 	return m.projectName, m.repo, m.deployProv,
-		m.netlifyToken, m.netlifySiteID,
+		m.netlifyToken, m.netlifySiteID, m.netlifyCreateNew,
 		m.dbProv, m.supabaseRef, m.supabaseURL, m.supabaseKey
 }
 

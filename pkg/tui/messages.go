@@ -174,8 +174,16 @@ type ConfirmRollbackMsg struct {
 
 // WizardCompleteMsg informuje o zakończeniu Setup Wizarda.
 type WizardCompleteMsg struct {
-	ProjectName string
-	Repo        string
+	ProjectName      string
+	Repo             string
+	DeployProv       string
+	NetlifyToken     string
+	NetlifySiteID    string
+	NetlifyCreateNew bool // true = rnr sam tworzy projekt Netlify przy pierwszym deploy
+	DBProv           string
+	SupabaseRef      string
+	SupabaseURL      string
+	SupabaseKey      string
 }
 
 // OutputLineMsg — linia wyjścia do podglądu logów w deploy/rollback.

@@ -295,7 +295,7 @@ environments:
 
   # ── PRODUKCJA ──────────────────────────────────────────────────────────────
   production:
-    branch: "main"
+    branch: "master"
     url: ""
     protected: true   # ⚠️  Wymaga potwierdzenia — zalecane!
 
@@ -399,6 +399,64 @@ environments:
     env:
       NODE_ENV: "development"
 `, projectName, projectName, repo)
+}
+
+// DefaultConfYAMLFromWizard generuje rnr.conf.yaml wypełniony danymi zebranymi
+// przez Setup Wizard. Różni się od DefaultConfYAML tym, że wstawia rzeczywiste
+// wartości tokenów i nazw providerów, a nie puste placeholdery.
+func DefaultConfYAMLFromWizard(
+	projectName, repo string,
+	deployProv, netlifyToken, netlifySiteID string,
+	netlifyCreateNew bool,
+	dbProv, supabaseRef, supabaseURL, supabaseKey string,
+) string {
+	netlifyCreateNewStr := "false"
+	if netlifyCreateNew {
+		netlifyCreateNewStr = "true"
+	}
+
+	netlifyBlock := fmt.Sprintf(`      provider: "%s"
+      netlify_auth_token: "%s"
+      netlify_site_id: "%s"
+      netlify_prod: true
+      netlify_create_new: %s`,
+		deployProv, netlifyToken, netlifySiteID, netlifyCreateNewStr)
+
+	dbBlock := fmt.Sprintf(`      provider: "%s"`, dbProv)
+	if dbProv == DBProviderSupabase {
+		dbBlock = fmt.Sprintf(`      provider: "supabase"
+      supabase_project_ref: "%s"
+      supabase_db_url: "%s"
+      supabase_anon_key: "%s"`,
+			supabaseRef, supabaseURL, supabaseKey)
+	}
+
+	return fmt.Sprintf(`# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  rnr.conf.yaml — Sejf Dewelopera (wygenerowany przez Setup Wizard)    ║
+# ║  Projekt: %-62s ║
+# ║  ⛔ NIE COMMITOWAĆ — plik jest automatycznie dodany do .gitignore     ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+project:
+  name: "%s"
+  repo: "%s"
+
+environments:
+
+  production:
+    branch: "master"
+    url: ""
+    protected: true
+
+    deploy:
+%s
+
+    database:
+%s
+
+    env:
+      NODE_ENV: "production"
+`, projectName, projectName, repo, netlifyBlock, dbBlock)
 }
 
 // SaveConf zapisuje obiekt ConfConfig do pliku rnr.conf.yaml.

@@ -207,7 +207,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// ── Wizard ────────────────────────────────────────────────────────
 	case WizardCompleteMsg:
-		cmds = append(cmds, m.cmdGenerateConfigs(msg.ProjectName, msg.Repo))
+		cmds = append(cmds, m.cmdGenerateConfigs(msg))
 
 	// ── Nawigacja ─────────────────────────────────────────────────────
 	case NavigateMsg:
@@ -539,20 +539,22 @@ func (m *RootModel) cmdLoadState() tea.Cmd {
 	}
 }
 
-func (m *RootModel) cmdGenerateConfigs(projectName, repo string) tea.Cmd {
+func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 	return func() tea.Msg {
 		if err := config.EnsureRnrDir(m.projectRoot); err != nil {
 			return ErrorMsg{Title: "Błąd katalogu", Message: err.Error(), Err: err}
 		}
 		pipelinePath := filepath.Join(m.projectRoot, config.PipelineFile)
 		if _, err := os.Stat(pipelinePath); os.IsNotExist(err) {
-			content := config.DefaultPipelineYAML(projectName)
+			content := config.DefaultPipelineYAML(w.ProjectName)
 			if err := os.WriteFile(pipelinePath, []byte(content), 0o644); err != nil {
 				return ErrorMsg{Title: "Błąd zapisu", Message: err.Error(), Err: err}
 			}
 		}
 		confPath := filepath.Join(m.projectRoot, config.ConfFile)
-		content := config.DefaultConfYAML(projectName, repo)
+		content := config.DefaultConfYAMLFromWizard(w.ProjectName, w.Repo,
+			w.DeployProv, w.NetlifyToken, w.NetlifySiteID, w.NetlifyCreateNew,
+			w.DBProv, w.SupabaseRef, w.SupabaseURL, w.SupabaseKey)
 		if err := os.WriteFile(confPath, []byte(content), 0o600); err != nil {
 			return ErrorMsg{Title: "Błąd zapisu", Message: err.Error(), Err: err}
 		}

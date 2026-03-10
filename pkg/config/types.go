@@ -114,6 +114,9 @@ type DeployConfig struct {
 	NetlifySiteID    string `yaml:"netlify_site_id,omitempty"`
 	// NetlifyProd — jeśli true, wdraża na produkcyjny URL (flaga --prod).
 	NetlifyProd bool `yaml:"netlify_prod,omitempty"`
+	// NetlifyCreateNew — jeśli true i NetlifySiteID jest pusty, rnr automatycznie
+	// tworzy nowy projekt Netlify komendą `netlify sites:create` i zapisuje ID.
+	NetlifyCreateNew bool `yaml:"netlify_create_new,omitempty"`
 
 	// ── Vercel ───────────────────────────────────────────────────────────
 	VercelToken     string `yaml:"vercel_token,omitempty"`

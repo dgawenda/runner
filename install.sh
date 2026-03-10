@@ -162,10 +162,16 @@ fetch_release_info() {
 
   success "Wersja: ${CYAN}${RELEASE_TAG_RESOLVED}${NC}"
 
-  # Znajdź URL do pobrania dla bieżącej platformy
-  ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep "${PLATFORM}" | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/')
+  # Znajdź URL do pobrania binarki.
+  # 1. Priorytetowo szukamy dokładnie nazwanego pliku rnr_v1.0.0-linux_amd64 (Twój standardowy artefakt).
+  ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep "rnr_v1.0.0-linux_amd64" | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
 
-  # Jeśli nie ma .tar.gz sprawdź .zip
+  # 2. Jeśli nie znaleziono dokładnej nazwy, wracamy do ogólnego dopasowania po platformie.
+  if [[ -z "$ASSET_URL" ]]; then
+    ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep "${PLATFORM}" | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
+  fi
+
+  # 3. Jeśli nadal nic, spróbuj ogólnie po OS (np. pojedyncza binarka dla systemu).
   if [[ -z "$ASSET_URL" ]]; then
     ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep "${OS}" | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
   fi

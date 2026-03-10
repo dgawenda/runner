@@ -17,6 +17,8 @@ package providers
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/neution/rnr/pkg/config"
 	"github.com/neution/rnr/pkg/logger"
@@ -43,8 +45,20 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	if d.NetlifyAuthToken == "" {
 		return fmt.Errorf("brak netlify_auth_token — uzupełnij w rnr.conf.yaml")
 	}
+
+	// ── Tryb: utwórz nowy projekt ────────────────────────────────────────
+	if d.NetlifyCreateNew && d.NetlifySiteID == "" {
+		siteID, err := p.createSite(ctx, env, outputCh)
+		if err != nil {
+			return err
+		}
+		// Zapamiętaj wygenerowany site ID na czas sesji
+		d.NetlifySiteID = siteID
+		send(outputCh, fmt.Sprintf("📌 Netlify Site ID: %s — zapisz go w rnr.conf.yaml → netlify_site_id", siteID))
+	}
+
 	if d.NetlifySiteID == "" {
-		return fmt.Errorf("brak netlify_site_id — uzupełnij w rnr.conf.yaml")
+		return fmt.Errorf("brak netlify_site_id — wpisz go w rnr.conf.yaml lub wybierz opcję 'Utwórz nowy projekt' w Setup Wizard")
 	}
 
 	// Buduj argumenty komendy
@@ -73,12 +87,72 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	return nil
 }
 
+// createSite tworzy nowy projekt na Netlify używając `netlify sites:create`.
+// Parsuje wynik i zwraca Site ID nowo utworzonego projektu.
+func (p *netlifyProvider) createSite(ctx context.Context, env config.Environment, outputCh chan<- string) (string, error) {
+	d := env.Deploy
+	send(outputCh, "✨ Netlify: tworzenie nowego projektu...")
+
+	envVars := mergeEnv(env.Env, map[string]string{
+		"NETLIFY_AUTH_TOKEN": d.NetlifyAuthToken,
+	})
+
+	runner := NewRunner(".", p.masker, p.log)
+
+	// Zbieramy surowy output, żeby wyłuskać Site ID
+	var rawOutput strings.Builder
+	captureCh := make(chan string, 64)
+	go func() {
+		for line := range captureCh {
+			rawOutput.WriteString(line + "\n")
+			send(outputCh, line) // przekaż też do TUI
+		}
+	}()
+
+	result := runner.RunCommand(ctx, "netlify",
+		[]string{"sites:create", "--json"},
+		envVars, captureCh)
+	close(captureCh)
+
+	if result.Error != nil {
+		return "", fmt.Errorf("netlify sites:create nieudany: %w", result.Error)
+	}
+
+	// Wyłuskaj Site ID z JSON lub z tekstu odpowiedzi CLI
+	// Netlify CLI zwraca np.: "Site ID:   abc123-xxxx-..."
+	siteID := extractNetlifySiteID(rawOutput.String())
+	if siteID == "" {
+		return "", fmt.Errorf("nie udało się wyłuskać Site ID z odpowiedzi Netlify CLI.\n"+
+			"Sprawdź ręcznie w https://app.netlify.com i wpisz site_id w rnr.conf.yaml.\n"+
+			"Odpowiedź CLI:\n%s", rawOutput.String())
+	}
+
+	send(outputCh, fmt.Sprintf("✅ Netlify: projekt utworzony (Site ID: %s)", siteID))
+	return siteID, nil
+}
+
 // Rollback dla Netlify — redeployuje poprzednią wersję.
 // Netlify automatycznie obsługuje historię deployów; ten rollback
 // realizowany jest przez git reset + ponowny deploy (patrz model rollbacku).
 func (p *netlifyProvider) Rollback(ctx context.Context, env config.Environment, outputCh chan<- string) error {
 	send(outputCh, "↩️  Netlify: ponowne wdrożenie przywróconej wersji...")
 	return p.Deploy(ctx, env, outputCh)
+}
+
+// extractNetlifySiteID wyłuskuje Site ID z wyjścia `netlify sites:create`.
+// Obsługuje zarówno format JSON (`"id": "..."`) jak i tekstowy (`Site ID: ...`).
+func extractNetlifySiteID(output string) string {
+	// Próba 1: JSON — "id": "abc123"
+	reJSON := regexp.MustCompile(`"id"\s*:\s*"([a-f0-9\-]{20,})"`)
+	if m := reJSON.FindStringSubmatch(output); len(m) == 2 {
+		return m[1]
+	}
+	// Próba 2: tekst CLI — "Site ID:   abc123"
+	reText := regexp.MustCompile(`(?i)site\s+id[:\s]+([a-f0-9\-]{20,})`)
+	if m := reText.FindStringSubmatch(output); len(m) == 2 {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
 }
 
 // ─── Vercel Provider ──────────────────────────────────────────────────────

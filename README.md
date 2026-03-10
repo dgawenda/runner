@@ -411,6 +411,34 @@ Provider: Netlify
 
 Wymagania: Netlify CLI musi być zainstalowane (`npm install -g netlify-cli`)
 
+#### Automatyczne tworzenie projektu Netlify (gdy jeszcze go nie ma)
+
+Jeśli w Setup Wizard wybierzesz Netlify jako dostawcę deployu, pojawi się dodatkowy krok:
+
+- **„Projekt Netlify”**:
+  - **Mam już Site ID** — wklejasz istniejące `netlify_site_id` z panelu Netlify,
+  - **Utwórz nowy projekt** — `rnr` sam wywoła `netlify sites:create` i założy nowy projekt.
+
+Wygenerowany fragment `rnr.conf.yaml` może wyglądać tak:
+
+```yaml
+environments:
+  production:
+    deploy:
+      provider: "netlify"
+      netlify_auth_token: "nfp_twój_token"
+      netlify_site_id: ""               # zostanie uzupełnione po pierwszym deployu
+      netlify_prod: true
+      netlify_create_new: true          # rnr utworzy projekt automatycznie
+```
+
+Przy pierwszym `rnr deploy`:
+
+1. `rnr` wywoła `netlify sites:create --json`,
+2. wyłuska wygenerowany **Site ID**, pokaże go w TUI i logach (zamaskowany w tokenach),
+3. użyje go do `netlify deploy`,
+4. wyświetli komunikat, abyś **zapisał Site ID** w `rnr.conf.yaml` (`netlify_site_id`), jeśli chcesz mieć go na stałe.
+
 ### Supabase — Migracje bazy danych
 
 `rnr` zarządza migracjami przez Supabase CLI:
