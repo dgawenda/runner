@@ -11,6 +11,8 @@
 package tui
 
 import (
+	"time"
+
 	"github.com/neution/rnr/pkg/gitops"
 	"github.com/neution/rnr/pkg/state"
 )
@@ -192,4 +194,46 @@ type WizardCompleteMsg struct {
 // OutputLineMsg — linia wyjścia do podglądu logów w deploy/rollback.
 type OutputLineMsg struct {
 	Line string
+}
+
+// ─── Wiadomości Git Panel ─────────────────────────────────────────────────
+
+// GitRefreshTickMsg — tik timera auto-odświeżania statusu Git.
+// Wysyłany co N sekund, wyzwala ponowny audit repozytorium.
+type GitRefreshTickMsg struct {
+	T time.Time
+}
+
+// GitBranchesLoadedMsg — lista lokalnych gałęzi po załadowaniu.
+type GitBranchesLoadedMsg struct {
+	Branches []string
+	Err      error
+}
+
+// GitHistoryLoadedMsg — historia commitów po załadowaniu.
+type GitHistoryLoadedMsg struct {
+	Commits []gitops.CommitInfo
+	Err     error
+}
+
+// GitCheckoutRequestMsg — żądanie checkout do podanej gałęzi (z git panelu → root model).
+type GitCheckoutRequestMsg struct {
+	Branch string
+}
+
+// GitCheckoutDoneMsg — wynik operacji git checkout.
+type GitCheckoutDoneMsg struct {
+	Branch string
+	Err    error
+}
+
+// GitCommitRequestMsg — żądanie stage all + commit (z git panelu → root model).
+type GitCommitRequestMsg struct {
+	Message string
+}
+
+// GitCommitDoneMsg — wynik operacji git commit.
+type GitCommitDoneMsg struct {
+	Hash string // skrócony hash nowego commita
+	Err  error
 }

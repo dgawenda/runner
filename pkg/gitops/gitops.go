@@ -305,6 +305,82 @@ func TagExists(workdir, tag string) (bool, error) {
 	return strings.TrimSpace(out) == tag, nil
 }
 
+// ─── Operacje na Gałęziach i Commitach ────────────────────────────────────
+
+// GetLocalBranches zwraca listę lokalnych gałęzi posortowaną alfabetycznie.
+// Aktualnie aktywna gałąź jest zwracana bez gwiazdki (plain name).
+func GetLocalBranches(workdir string) ([]string, error) {
+	out, err := runGit(workdir, "branch", "--format=%(refname:short)")
+	if err != nil {
+		return nil, err
+	}
+	var branches []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if b := strings.TrimSpace(line); b != "" {
+			branches = append(branches, b)
+		}
+	}
+	return branches, nil
+}
+
+// StageAll dodaje wszystkie zmienione, nowe i usunięte pliki do staging area.
+// Odpowiednik: git add -A
+func StageAll(workdir string) error {
+	_, err := runGit(workdir, "add", "-A")
+	return err
+}
+
+// CommitWithMessage tworzy commit z podaną wiadomością.
+// Zwraca hash nowego commita.
+func CommitWithMessage(workdir, message string) (string, error) {
+	if strings.TrimSpace(message) == "" {
+		return "", fmt.Errorf("wiadomość commita nie może być pusta")
+	}
+	_, err := runGit(workdir, "commit", "-m", message)
+	if err != nil {
+		return "", err
+	}
+	// Pobierz hash nowego commita
+	hash, err := runGit(workdir, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return "?", nil // commit się powiódł, hash nieznany
+	}
+	return strings.TrimSpace(hash), nil
+}
+
+// GetCommitHistory zwraca ostatnie n commitów bieżącej gałęzi.
+// Pola CommitInfo są w pełni wypełnione (Hash, ShortHash, Message, Author, RelativeDate).
+func GetCommitHistory(workdir string, n int) ([]CommitInfo, error) {
+	// Separator \x00 (null byte) — bezpieczny separator dla wszystkich pól
+	const sep = "\x00"
+	format := "%H" + sep + "%h" + sep + "%s" + sep + "%an" + sep + "%ar"
+	out, err := runGit(workdir, "log",
+		fmt.Sprintf("--format=%s", format),
+		fmt.Sprintf("-n%d", n),
+	)
+	if err != nil {
+		return nil, err
+	}
+	var commits []CommitInfo
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, sep)
+		if len(parts) < 5 {
+			continue
+		}
+		commits = append(commits, CommitInfo{
+			Hash:         parts[0],
+			ShortHash:    parts[1],
+			Message:      parts[2],
+			Author:       parts[3],
+			RelativeDate: parts[4],
+		})
+	}
+	return commits, nil
+}
+
 // ─── Wewnętrzne ───────────────────────────────────────────────────────────
 
 // runGit wykonuje komendę git w podanym katalogu i zwraca stdout.

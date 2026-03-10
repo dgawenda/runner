@@ -44,6 +44,7 @@ const (
 	ScreenDashboard               // Główny Dashboard
 	ScreenConfirm                 // Potwierdzenie wdrożenia (środowiska chronione)
 	ScreenDeploy                  // Ekran wdrożenia z progress bars
+	ScreenGit                     // Git Panel — status, gałęzie, historia, commit
 	ScreenRollback                // Ekran rollbacku
 	ScreenPromote                 // Ekran promote (migracje DB)
 	ScreenLogs                    // Przeglądarka logów
@@ -93,6 +94,7 @@ type RootModel struct {
 	wizard    WizardModel
 	dashboard DashboardModel
 	deploy    DeployModel
+	gitPanel  GitPanelModel
 
 	// Spinner ładowania
 	spinner spinner.Model
@@ -148,11 +150,20 @@ func NewRootModel(projectRoot string) *RootModel {
 // ─── Interfejs Bubble Tea ─────────────────────────────────────────────────
 
 // Init uruchamia pierwszą komendę — ładowanie konfiguracji.
+// Uruchamia też ticker auto-odświeżania statusu Git (co 3s).
 func (m *RootModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		m.cmdLoadConfig(),
+		cmdGitPollTick(), // start live git refresh
 	)
+}
+
+// cmdGitPollTick planuje kolejne odświeżenie statusu Git za 3 sekundy.
+func cmdGitPollTick() tea.Cmd {
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		return GitRefreshTickMsg{T: t}
+	})
 }
 
 // Update to serce pętli Elm — obsługuje wszystkie zdarzenia.
@@ -192,16 +203,40 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.cmdAuditGit(), m.spinner.Tick)
 		}
 
-	case GitStatusMsg:
-		m.loading = false
-		if msg.Err != nil {
-			m.showError("Błąd Git", msg.Err.Error(), msg.Err)
-			return m, nil
+	// ── Auto-odświeżanie Git (live polling co 3s) ─────────────────────
+	case GitRefreshTickMsg:
+		// Zawsze planuj kolejny tick — niezależnie od ekranu
+		cmds = append(cmds, cmdGitPollTick())
+		// Odśwież status tylko na Dashboard lub Git Panel (nie podczas deploy)
+		if m.screen == ScreenDashboard || m.screen == ScreenGit {
+			cmds = append(cmds, m.cmdAuditGitSilent())
 		}
-		m.gitStatus = msg.Result
-		m.loading = true
-		m.loadMsg = "Ładowanie historii wdrożeń..."
-		cmds = append(cmds, m.cmdLoadState(), m.spinner.Tick)
+
+	case GitStatusMsg:
+		// Pierwsza inicjalizacja (loading=true) — przejdź do ładowania stanu
+		if m.loading {
+			if msg.Err != nil {
+				m.showError("Błąd Git", msg.Err.Error(), msg.Err)
+				return m, nil
+			}
+			m.gitStatus = msg.Result
+			m.dashboard.gitStatus = msg.Result
+			m.gitPanel.gitStatus = msg.Result
+			m.loading = true
+			m.loadMsg = "Ładowanie historii wdrożeń..."
+			cmds = append(cmds, m.cmdLoadState(), m.spinner.Tick)
+		} else {
+			// Polling — cicha aktualizacja bez zmiany ekranu
+			if msg.Err == nil {
+				m.gitStatus = msg.Result
+				m.dashboard.gitStatus = msg.Result
+				m.gitPanel.gitStatus = msg.Result
+			}
+			// Przekaż też do gitPanel dla natychmiastowego renderowania
+			var gpCmd tea.Cmd
+			m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+			cmds = append(cmds, gpCmd)
+		}
 
 	case StateLoadedMsg:
 		m.loading = false
@@ -212,6 +247,39 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.dashboard = NewDashboardModel(m.width, m.height, m.cfg, m.gitStatus, m.stateData)
 		m.screen = ScreenDashboard
+
+	// ── Git Panel — operacje ───────────────────────────────────────────
+	case GitCheckoutRequestMsg:
+		// Żądanie checkout z GitPanel → wykonaj i odśwież
+		cmds = append(cmds, m.cmdGitCheckout(msg.Branch))
+
+	case GitCommitRequestMsg:
+		// Żądanie commit z GitPanel → stage all + commit
+		cmds = append(cmds, m.cmdGitStageAndCommit(msg.Message))
+
+	case GitCheckoutDoneMsg:
+		// Wynik checkout → przekaż do gitPanel + odśwież git status + gałęzie
+		var gpCmd tea.Cmd
+		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, gpCmd)
+		cmds = append(cmds, m.cmdAuditGitSilent(), m.cmdGitLoadBranches())
+
+	case GitCommitDoneMsg:
+		// Wynik commit → przekaż do gitPanel + odśwież git status + historię
+		var gpCmd tea.Cmd
+		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, gpCmd)
+		cmds = append(cmds, m.cmdAuditGitSilent(), m.cmdGitLoadHistory())
+
+	case GitBranchesLoadedMsg:
+		var gpCmd tea.Cmd
+		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, gpCmd)
+
+	case GitHistoryLoadedMsg:
+		var gpCmd tea.Cmd
+		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, gpCmd)
 
 	// ── Wizard ────────────────────────────────────────────────────────
 	case WizardCompleteMsg:
@@ -386,6 +454,18 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = ScreenDashboard
 			}
 		}
+	case ScreenGit:
+		// Przekaż zdarzenia do git panelu
+		var cmd tea.Cmd
+		m.gitPanel, cmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, cmd)
+		// G lub Q zamykają git panel
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			switch keyMsg.String() {
+			case "g", "G", "q", "esc":
+				m.screen = ScreenDashboard
+			}
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -408,6 +488,8 @@ func (m *RootModel) View() string {
 		return m.deploy.View()
 	case ScreenLogs:
 		return m.logs.View()
+	case ScreenGit:
+		return m.gitPanel.View()
 	case ScreenError:
 		return m.viewError()
 	default:
@@ -525,6 +607,9 @@ func (m *RootModel) handleDashboardKeys(msg tea.KeyMsg) tea.Cmd {
 		return m.cmdInitPromote()
 	case "l", "L":
 		return m.cmdOpenLogs()
+	case "g", "G":
+		// Otwórz Git Panel z aktualnymi danymi
+		return m.cmdOpenGitPanel()
 	}
 	return nil
 }
@@ -692,6 +777,66 @@ func (m *RootModel) cmdOpenLogs() tea.Cmd {
 		m.logs = NewLogsModel(m.width, m.height, logsDir)
 		m.screen = ScreenLogs
 		return nil
+	}
+}
+
+// cmdOpenGitPanel otwiera Git Panel i ładuje dane (gałęzie + historia).
+func (m *RootModel) cmdOpenGitPanel() tea.Cmd {
+	m.gitPanel = NewGitPanelModel(m.width, m.height)
+	m.gitPanel.gitStatus = m.gitStatus
+	m.screen = ScreenGit
+	return tea.Batch(
+		m.cmdGitLoadBranches(),
+		m.cmdGitLoadHistory(),
+	)
+}
+
+// cmdAuditGitSilent odświeża status Git bez zmiany ekranu/loadingu.
+// Używany przez polling i po operacjach git.
+func (m *RootModel) cmdAuditGitSilent() tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		result, err := gitops.AuditRepo(root)
+		return GitStatusMsg{Result: result, Err: err}
+	}
+}
+
+// cmdGitLoadBranches pobiera listę lokalnych gałęzi dla Git Panelu.
+func (m *RootModel) cmdGitLoadBranches() tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		branches, err := gitops.GetLocalBranches(root)
+		return GitBranchesLoadedMsg{Branches: branches, Err: err}
+	}
+}
+
+// cmdGitLoadHistory pobiera historię ostatnich 30 commitów.
+func (m *RootModel) cmdGitLoadHistory() tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		commits, err := gitops.GetCommitHistory(root, 30)
+		return GitHistoryLoadedMsg{Commits: commits, Err: err}
+	}
+}
+
+// cmdGitCheckout wykonuje git checkout na podaną gałąź.
+func (m *RootModel) cmdGitCheckout(branch string) tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		err := gitops.CheckoutBranch(root, branch)
+		return GitCheckoutDoneMsg{Branch: branch, Err: err}
+	}
+}
+
+// cmdGitStageAndCommit wykonuje git add -A && git commit -m "message".
+func (m *RootModel) cmdGitStageAndCommit(message string) tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		if err := gitops.StageAll(root); err != nil {
+			return GitCommitDoneMsg{Err: fmt.Errorf("git add -A: %w", err)}
+		}
+		hash, err := gitops.CommitWithMessage(root, message)
+		return GitCommitDoneMsg{Hash: hash, Err: err}
 	}
 }
 

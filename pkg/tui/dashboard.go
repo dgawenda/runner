@@ -136,7 +136,7 @@ func (m DashboardModel) renderHeader(width int) string {
 		left += StyleMuted.Render(" v"+projectVersion)
 	}
 
-	right := StyleMuted.Render(time.Now().Format("02.01.2006 15:04"))
+	right := StyleMuted.Render(time.Now().Format("02.01.2006 15:04") + "  ⟳ live")
 
 	header := lipgloss.NewStyle().
 		Width(width).
@@ -321,8 +321,9 @@ func (m DashboardModel) renderKeyBindings(width int) string {
 		keyBind("D", "Wdróż na "+selectedEnv),
 		keyBind("R", "Rollback"),
 		keyBind("P", "Promote DB"),
+		keyBind("G", "Git Panel"),
 		keyBind("L", "Logi"),
-		keyBind("↑↓", "Zmień środowisko"),
+		keyBind("↑↓", "Środowisko"),
 		keyBind("Q", "Wyjdź"),
 	)
 
