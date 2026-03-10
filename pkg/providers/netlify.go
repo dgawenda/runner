@@ -22,12 +22,14 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/neution/rnr/pkg/config"
 	"github.com/neution/rnr/pkg/logger"
+	"gopkg.in/yaml.v3"
 )
 
 // timeNowUnix zwraca aktualny czas Unix — helper dla netlifySlug retry.
@@ -37,13 +39,15 @@ const netlifyInstallHint = "npm install -g netlify-cli\n  lub: yarn global add n
 
 // netlifyProvider implementuje DeployProvider dla Netlify.
 type netlifyProvider struct {
-	masker *logger.Masker
-	log    *logger.Logger
+	masker      *logger.Masker
+	log         *logger.Logger
+	projectRoot string // Ścieżka do projektu — do zapisu site ID po auto-tworzeniu
 }
 
 // NewNetlifyProvider tworzy dostawcę Netlify.
-func NewNetlifyProvider(masker *logger.Masker, log *logger.Logger) DeployProvider {
-	return &netlifyProvider{masker: masker, log: log}
+// projectRoot jest potrzebny do zapisu nowo utworzonego Site ID do rnr.conf.yaml.
+func NewNetlifyProvider(masker *logger.Masker, log *logger.Logger, projectRoot string) DeployProvider {
+	return &netlifyProvider{masker: masker, log: log, projectRoot: projectRoot}
 }
 
 func (p *netlifyProvider) Name() string { return "Netlify" }
@@ -69,7 +73,19 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 			return err
 		}
 		d.NetlifySiteID = siteID
-		send(outputCh, fmt.Sprintf("📌 ZAPAMIĘTAJ → Site ID: %s — wpisz go w rnr.conf.yaml → environments.X.deploy.netlify_site_id", siteID))
+
+		// Zapisz Site ID do rnr.conf.yaml — trwałe zapamiętanie na kolejne uruchomienia
+		if p.projectRoot != "" {
+			if saveErr := p.saveNetlifySiteID(env.ProjectName, siteID, outputCh); saveErr != nil {
+				// Niepowodzenie zapisu jest niekrytyczne — logujemy, ale nie blokujemy deployu
+				send(outputCh, fmt.Sprintf("⚠️  Nie udało się zapisać Site ID do rnr.conf.yaml: %v", saveErr))
+				send(outputCh, fmt.Sprintf("📌 ZAPAMIĘTAJ RĘCZNIE → Site ID: %s", siteID))
+			} else {
+				send(outputCh, fmt.Sprintf("💾 Site ID '%s' zapisany automatycznie do rnr.conf.yaml", siteID))
+			}
+		} else {
+			send(outputCh, fmt.Sprintf("📌 ZAPAMIĘTAJ → Site ID: %s — wpisz go w rnr.conf.yaml → environments.X.deploy.netlify_site_id", siteID))
+		}
 	}
 
 	if d.NetlifySiteID == "" {
@@ -250,6 +266,56 @@ func (p *netlifyProvider) createSiteViaAPI(token, projectName string, outputCh c
 	send(outputCh, fmt.Sprintf("✅ Nowy projekt Netlify: '%s'", result.Name))
 	send(outputCh, fmt.Sprintf("   🌐 URL: %s", result.URL))
 	return result.ID, nil
+}
+
+// saveNetlifySiteID zapisuje nowo utworzony Site ID do rnr.conf.yaml.
+// Wyszukuje środowisko po nazwie projektu i ustawia netlify_site_id.
+// Ustawia też netlify_create_new: false, żeby kolejne uruchomienia nie tworzyły nowych projektów.
+func (p *netlifyProvider) saveNetlifySiteID(projectName, siteID string, outputCh chan<- string) error {
+	confPath := filepath.Join(p.projectRoot, config.ConfFile)
+
+	// Wczytaj istniejący plik conf
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		return fmt.Errorf("odczyt %s: %w", config.ConfFile, err)
+	}
+
+	var conf config.ConfConfig
+	if err := yaml.Unmarshal(data, &conf); err != nil {
+		return fmt.Errorf("parsowanie %s: %w", config.ConfFile, err)
+	}
+	if conf.Environments == nil {
+		conf.Environments = make(map[string]config.EnvSecrets)
+	}
+
+	// Zaktualizuj site ID we wszystkich środowiskach które mają ten token
+	// ale nie mają site ID (mogły być właśnie tworzone)
+	updated := false
+	for envName, envSecrets := range conf.Environments {
+		if envSecrets.Deploy.NetlifyCreateNew && envSecrets.Deploy.NetlifySiteID == "" {
+			envSecrets.Deploy.NetlifySiteID = siteID
+			envSecrets.Deploy.NetlifyCreateNew = false // wyłącz auto-tworzenie po pierwszym sukcesie
+			conf.Environments[envName] = envSecrets
+			updated = true
+			send(outputCh, fmt.Sprintf("✏️  Zaktualizowano środowisko '%s' w rnr.conf.yaml", envName))
+		}
+	}
+
+	if !updated {
+		return fmt.Errorf("nie znaleziono środowiska z netlify_create_new: true i pustym netlify_site_id")
+	}
+
+	// Zapisz z powrotem (atomowy zapis przez temp file)
+	newData, err := yaml.Marshal(&conf)
+	if err != nil {
+		return fmt.Errorf("serializacja %s: %w", config.ConfFile, err)
+	}
+
+	tmpPath := confPath + ".tmp"
+	if err := os.WriteFile(tmpPath, newData, 0o600); err != nil {
+		return fmt.Errorf("zapis tymczasowy: %w", err)
+	}
+	return os.Rename(tmpPath, confPath)
 }
 
 // netlifySlug zamienia nazwę projektu na prawidłowy slug Netlify:

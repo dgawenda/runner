@@ -544,6 +544,8 @@ stages:
 }
 
 // DefaultConfYAMLFromWizard generuje rnr.conf.yaml wypełniony danymi z Setup Wizarda.
+// Generuje obie sekcje środowiskowe: production (pełne dane) + staging (te same tokeny,
+// osobny site ID do uzupełnienia).
 func DefaultConfYAMLFromWizard(
 	projectName, repo string,
 	deployProv, netlifyToken, netlifySiteID string,
@@ -555,25 +557,39 @@ func DefaultConfYAMLFromWizard(
 		netlifyCreateNewStr = "true"
 	}
 
-	deployBlock := ""
+	// ── Blok wdrożenia dla PRODUKCJI ──────────────────────────────────────
+	prodDeployBlock := ""
+	stagingDeployBlock := ""
 	if deployProv == ProviderNetlify {
-		deployBlock = fmt.Sprintf(
-			`      netlify_auth_token: "%s"
-      netlify_site_id: "%s"
-      netlify_create_new: %s`,
+		prodDeployBlock = fmt.Sprintf(
+			`netlify_auth_token: "%s"
+    netlify_site_id: "%s"
+    netlify_create_new: %s`,
 			netlifyToken, netlifySiteID, netlifyCreateNewStr)
+		// Staging: ten sam token, osobny site ID (pusty = utwórz nowy)
+		stagingDeployBlock = fmt.Sprintf(
+			`netlify_auth_token: "%s"
+    netlify_site_id: ""        # ← wpisz Site ID dla staging LUB ustaw netlify_create_new: true
+    netlify_create_new: %s`,
+			netlifyToken, netlifyCreateNewStr)
 	} else if deployProv == ProviderVercel {
-		deployBlock = fmt.Sprintf(
-			`      vercel_token: "%s"`, netlifyToken)
+		prodDeployBlock = fmt.Sprintf(`vercel_token: "%s"`, netlifyToken)
+		stagingDeployBlock = fmt.Sprintf(`vercel_token: "%s"`, netlifyToken)
 	}
 
-	dbBlock := ""
+	// ── Blok bazy danych dla PRODUKCJI ────────────────────────────────────
+	prodDBBlock := ""
+	stagingDBBlock := ""
 	if dbProv == DBProviderSupabase {
-		dbBlock = fmt.Sprintf(
-			`      supabase_project_ref: "%s"
-      supabase_db_url: "%s"
-      supabase_anon_key: "%s"`,
+		prodDBBlock = fmt.Sprintf(
+			`supabase_project_ref: "%s"
+    supabase_db_url: "%s"
+    supabase_anon_key: "%s"`,
 			supabaseRef, supabaseURL, supabaseKey)
+		// Staging: osobny projekt Supabase (do uzupełnienia)
+		stagingDBBlock = `supabase_project_ref: ""   # ← osobny projekt Supabase dla staging
+    supabase_db_url: ""
+    supabase_anon_key: ""`
 	}
 
 	return fmt.Sprintf(`# ╔══════════════════════════════════════════════════════════════════════════╗
@@ -592,17 +608,28 @@ notifications:
   slack_webhook: ""
 
 # ─── Sekrety per środowisko ───────────────────────────────────────────────────
+# UWAGA: Klucze środowisk muszą odpowiadać nazwom z rnr.yaml → environments.
 environments:
 
+  # ── PRODUKCJA ─────────────────────────────────────────────────────────────
   production:
     deploy:
-%s
+      %s
 
     database:
-%s
+      %s
+
+  # ── STAGING ───────────────────────────────────────────────────────────────
+  # Staging używa tych samych providerów co produkcja — uzupełnij osobne credentials.
+  staging:
+    deploy:
+      %s
+
+    database:
+      %s
 `, projectName,
-		prefixLines(deployBlock, "    "),
-		prefixLines(dbBlock, "    "))
+		prodDeployBlock, prodDBBlock,
+		stagingDeployBlock, stagingDBBlock)
 }
 
 // ─── Zarządzanie środowiskami ──────────────────────────────────────────────

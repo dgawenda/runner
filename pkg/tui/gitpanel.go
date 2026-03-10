@@ -779,7 +779,7 @@ func (m GitPanelModel) renderKeyBindings(width int) string {
 
 	bindings = append(bindings,
 		keyBind("TAB / 1-4", "Zakładki"),
-		keyBind("G / Q", "Powrót"),
+		keyBind("Q / ESC", "Powrót"),
 	)
 
 	divider := Divider(width)

@@ -56,11 +56,13 @@ type DatabaseProvider interface {
 // ─── Fabryki ──────────────────────────────────────────────────────────────
 
 // NewDeployProvider tworzy odpowiedni dostawca wdrożenia na podstawie konfiguracji.
+// projectRoot jest potrzebny przez Netlify provider do zapisu site ID po automatycznym
+// utworzeniu projektu (netlify_create_new: true).
 // Zwraca błąd jeśli dostawca jest nieznany lub brak wymaganej konfiguracji.
-func NewDeployProvider(env config.Environment, masker *logger.Masker, log *logger.Logger) (DeployProvider, error) {
+func NewDeployProvider(env config.Environment, masker *logger.Masker, log *logger.Logger, projectRoot string) (DeployProvider, error) {
 	switch env.Deploy.Provider {
 	case config.ProviderNetlify:
-		return NewNetlifyProvider(masker, log), nil
+		return NewNetlifyProvider(masker, log, projectRoot), nil
 	case config.ProviderVercel:
 		return NewVercelProvider(masker, log), nil
 	case config.ProviderSSH:

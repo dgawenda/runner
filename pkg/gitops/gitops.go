@@ -250,6 +250,7 @@ func FetchOrigin(workdir string) error {
 
 // CheckoutBranch przełącza na podaną gałąź.
 // Jeśli gałąź nie istnieje lokalnie, próbuje śledzić zdalną (origin/<branch>).
+// Jeśli zdalna gałąź też nie istnieje, tworzy nową lokalną gałąź od bieżącego HEAD.
 // Zwraca nil jeśli gałąź już jest aktywna.
 func CheckoutBranch(workdir, branch string) error {
 	// Sprawdź bieżącą gałąź — jeśli już tam jesteśmy, nic nie rób
@@ -270,8 +271,20 @@ func CheckoutBranch(workdir, branch string) error {
 
 	// Próba: śledź zdalną gałąź origin/<branch>
 	_, err = runGit(workdir, "checkout", "-b", branch, "--track", "origin/"+branch)
-	if err != nil {
-		return fmt.Errorf("nie można przełączyć na gałąź '%s': %w\nUpewnij się że gałąź istnieje lokalnie lub na origin.", branch, err)
+	if err == nil {
+		return nil // udało się — gałąź zdalna istniała
+	}
+
+	// Fallback: utwórz nową lokalną gałąź od bieżącego HEAD.
+	// Dzieje się gdy: gałąź środowiskowa nie istnieje ani lokalnie ani na origin.
+	// Jest to normalne przy pierwszym wdrożeniu na nowe środowisko.
+	_, createErr := runGit(workdir, "checkout", "-b", branch)
+	if createErr != nil {
+		return fmt.Errorf(
+			"nie można przełączyć na gałąź '%s': %w\n"+
+				"Próbowano też utworzyć nową gałąź, ale nie udało się: %v",
+			branch, err, createErr,
+		)
 	}
 	return nil
 }

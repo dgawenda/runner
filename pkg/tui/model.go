@@ -483,13 +483,14 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.gitPanel, cmd = m.gitPanel.Update(msg)
 		cmds = append(cmds, cmd)
-		// Klawiszami G/Q/ESC zamykamy panel — ale TYLKO gdy gitPanel nie obsługuje ich sam.
-		// ESC w gitPanel: zamyka diff lub unfocusuje input (nie zamykamy panelu).
-		// Q w gitPanel z focusem inputa: wpisuje 'q' do inputa (nie zamykamy panelu).
+		// Zamknięcie panelu: TYLKO klawisz Q lub ESC.
+		// "G" jest celowo POMINIĘTE tutaj — naciśnięcie G z Dashboard ustawia
+		// screen=ScreenGit synchronicznie w cmdOpenGitPanel(), a następna iteracja
+		// pętli trafia już do case ScreenGit. Gdyby obsługiwać tu G→zamknij,
+		// panel otwierałby się i natychmiast zamykał w JEDNEJ ramce.
+		// Użytkownik zamyka panel klawiszem Q lub ESC.
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			switch keyMsg.String() {
-			case "g", "G":
-				m.screen = ScreenDashboard
 			case "q":
 				// Nie zamykaj jeśli użytkownik pisze commit (input sfocusowany)
 				if !m.gitPanel.commitInput.Focused() {
@@ -790,59 +791,125 @@ func (m *RootModel) cmdInitPromote() tea.Cmd {
 	return func() tea.Msg {
 		envs := m.cfg.Environments
 
-		// Znajdź środowisko źródłowe (staging) i docelowe (production).
-		// Priorytety: dokładne nazwy > protected flag > pierwsze środowisko z bazą DB.
+		// Pomocnik sprawdzający czy środowisko ma skonfigurowany provider DB.
+		hasDB := func(name string) bool {
+			env, ok := envs[name]
+			if !ok {
+				return false
+			}
+			p := env.Database.Provider
+			return p != "" && p != config.DBProviderNone
+		}
+
+		// Zbierz środowiska z bazą danych — promote ma sens TYLKO dla środowisk z DB.
+		var dbEnvs []string
+		for name := range envs {
+			if hasDB(name) {
+				dbEnvs = append(dbEnvs, name)
+			}
+		}
+
+		// Blokuj jeśli mniej niż 2 środowiska mają skonfigurowaną bazę danych.
+		if len(dbEnvs) < 2 {
+			msg := "Promote (podmiana baz danych) wymaga co najmniej dwóch środowisk\n" +
+				"z skonfigurowanym dostawcą bazy danych.\n\n"
+			if len(dbEnvs) == 0 {
+				msg += "Żadne środowisko nie ma skonfigurowanej bazy danych.\n\n"
+			} else {
+				msg += fmt.Sprintf("Tylko jedno środowisko ma bazę: '%s'.\n\n", dbEnvs[0])
+			}
+			msg += "Aby skonfigurować bazę danych, ustaw w rnr.yaml:\n" +
+				"  environments:\n" +
+				"    staging:\n" +
+				"      database:\n" +
+				"        provider: supabase  # lub: prisma | postgres | mysql\n\n" +
+				"Sekrety (URL, klucze) uzupełnij w rnr.conf.yaml."
+			return ErrorMsg{
+				Title:   "Brak baz danych do promote",
+				Message: msg,
+			}
+		}
+
+		// Znajdź środowisko źródłowe i docelowe spośród TYCH Z BAZĄ DANYCH.
 		var sourceEnv, targetEnv string
 
-		// 1. Preferuj dokładne, typowe nazwy
+		// 1. Preferuj dokładne, typowe nazwy (tylko jeśli mają DB)
 		for _, name := range []string{"staging", "stage", "develop", "dev"} {
-			if _, ok := envs[name]; ok && sourceEnv == "" {
+			if hasDB(name) && sourceEnv == "" {
 				sourceEnv = name
 			}
 		}
 		for _, name := range []string{"production", "prod", "main", "live"} {
-			if _, ok := envs[name]; ok && targetEnv == "" {
+			if hasDB(name) && targetEnv == "" {
 				targetEnv = name
 			}
 		}
 
-		// 2. Fallback: protected = target, first non-protected with DB = source
+		// 2. Fallback: protected = target, non-protected = source (oba muszą mieć DB)
 		if targetEnv == "" || sourceEnv == "" {
 			for name, env := range envs {
-				hasDB := env.Database.Provider != "" && env.Database.Provider != "none"
-				if env.Protected && hasDB && targetEnv == "" {
+				if !hasDB(name) {
+					continue
+				}
+				if env.Protected && targetEnv == "" && name != sourceEnv {
 					targetEnv = name
-				} else if !env.Protected && hasDB && sourceEnv == "" {
+				} else if !env.Protected && sourceEnv == "" && name != targetEnv {
 					sourceEnv = name
 				}
 			}
 		}
 
-		// 3. Finalny fallback: dowolne dwa środowiska jeśli mamy tylko jedno z DB
+		// 3. Ostateczny fallback: pierwsze dwa środowiska z DB (bez preferencji nazwy)
 		if targetEnv == "" || sourceEnv == "" {
-			for name := range envs {
-				if name != sourceEnv && targetEnv == "" {
-					targetEnv = name
-				} else if name != targetEnv && sourceEnv == "" {
+			for _, name := range dbEnvs {
+				if sourceEnv == "" {
 					sourceEnv = name
+				} else if targetEnv == "" && name != sourceEnv {
+					targetEnv = name
 				}
 			}
 		}
 
-		if sourceEnv == "" || targetEnv == "" {
+		if sourceEnv == "" || targetEnv == "" || sourceEnv == targetEnv {
 			return ErrorMsg{
-				Title:   "Brak środowisk do promote",
-				Message: "Promote wymaga co najmniej dwóch środowisk.\n\n" +
-					"Upewnij się, że rnr.yaml ma skonfigurowane sekcje\n" +
-					"'environments' z co najmniej dwoma środowiskami.",
+				Title:   "Nie można ustalić środowisk promote",
+				Message: fmt.Sprintf(
+					"Znaleziono środowiska z DB: %v\n\n"+
+						"Nie udało się automatycznie ustalić środowiska źródłowego i docelowego.\n"+
+						"Upewnij się, że masz co najmniej dwa różne środowiska z bazą danych.",
+					dbEnvs),
 			}
 		}
-		if sourceEnv == targetEnv {
+
+		// Sprawdź czy oba środowiska mają skonfigurowane sekrety bazy danych.
+		sourceCfg := envs[sourceEnv]
+		targetCfg := envs[targetEnv]
+		sourceHasSecrets := sourceCfg.Database.SupabaseProjectRef != "" ||
+			sourceCfg.Database.DBURL != "" ||
+			sourceCfg.Database.DBMigrateCmd != ""
+		targetHasSecrets := targetCfg.Database.SupabaseProjectRef != "" ||
+			targetCfg.Database.DBURL != "" ||
+			targetCfg.Database.DBMigrateCmd != ""
+
+		var missingSecrets []string
+		if !sourceHasSecrets {
+			missingSecrets = append(missingSecrets, fmt.Sprintf("'%s' — brak credentials bazy", sourceEnv))
+		}
+		if !targetHasSecrets {
+			missingSecrets = append(missingSecrets, fmt.Sprintf("'%s' — brak credentials bazy", targetEnv))
+		}
+		if len(missingSecrets) > 0 {
 			return ErrorMsg{
-				Title:   "Błędna konfiguracja",
-				Message: fmt.Sprintf("Źródło i cel promote to to samo środowisko: '%s'.\n", sourceEnv),
+				Title: "Brak credentials bazy danych",
+				Message: fmt.Sprintf(
+					"Promote: %s → %s\n\n"+
+						"Brakujące credentials w rnr.conf.yaml:\n  • %s\n\n"+
+						"Uzupełnij sekcje environments.<nazwa>.database w rnr.conf.yaml.",
+					sourceEnv, targetEnv,
+					strings.Join(missingSecrets, "\n  • ")),
 			}
 		}
+
 		return PromoteStartMsg{SourceEnv: sourceEnv, TargetEnv: targetEnv}
 	}
 }
@@ -1105,7 +1172,7 @@ func (m *RootModel) cmdRunPipeline(envName string, stages []config.Stage, ch cha
 				}
 			}
 		case config.StageTypeDeploy:
-			depProv, err := providers.NewDeployProvider(envCfg, masker, log)
+			depProv, err := providers.NewDeployProvider(envCfg, masker, log, m.projectRoot)
 			if err != nil {
 				stageErr = err
 			} else {
@@ -1236,7 +1303,7 @@ func (m *RootModel) cmdExecuteRollback(msg RollbackStartMsg) tea.Cmd {
 		}()
 		defer close(outputCh)
 
-		depProv, err := providers.NewDeployProvider(envCfg, masker, log)
+		depProv, err := providers.NewDeployProvider(envCfg, masker, log, m.projectRoot)
 		if err != nil {
 			return RollbackFailedMsg{Err: err}
 		}
