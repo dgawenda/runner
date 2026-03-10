@@ -1,160 +1,78 @@
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  rnr.conf.yaml — Secrets & Environment Configuration                   ║
+# ║  rnr.conf.yaml — Sejf Sekretów (WYŁĄCZNIE dane wrażliwe)              ║
+# ║  Projekt: runner                                                         ║
 # ║                                                                          ║
-# ║  ⛔ DO NOT COMMIT — this file is automatically gitignored               ║
-# ║  ✏️  Edit manually or regenerate:  rnr init --force                    ║
+# ║  ⛔ NIE COMMITOWAĆ — plik jest automatycznie dodany do .gitignore      ║
+# ║  ✏️  Każdy developer przechowuje własny plik lokalnie                  ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# CO TUTAJ TRAFIA (TYLKO dane wrażliwe):
+#   · Tokeny API (Netlify, Vercel, GitHub)
+#   · Klucze Supabase (db_url, anon_key, service_role_key)
+#   · Hasła SSH, FTP, Docker Registry
+#   · Webhooki Slack
+#
+# CZEGO TU NIE MA (jest w rnr.yaml, który możesz commitować):
+#   · Gałęzie Git (branch), adresy URL, ochrona środowisk
+#   · Wybór dostawców (netlify/supabase/itp.)
+#   · Definicja kroków potoku (stages)
 
-# ─── Project ─────────────────────────────────────────────────────────────────
+# ─── Opcjonalne nadpisanie danych autora ──────────────────────────────────────
 project:
-  name: "my-app"
-  version: "1.0.0"
-  repo: "owner/repo"          # GitHub owner/repo
-  actor: ""                   # Override deploy author (empty = git config user.name)
-  actor_email: ""             # Override deploy author email
+  actor: ""           # Nadpisuje git config user.name (opcjonalne)
+  actor_email: ""     # Nadpisuje git config user.email (opcjonalne)
 
-# ─── Notifications ───────────────────────────────────────────────────────────
+# ─── Powiadomienia ───────────────────────────────────────────────────────────
 notifications:
-  slack_webhook: ""           # Slack incoming webhook URL
+  slack_webhook: ""   # Slack Incoming Webhook URL (puste = wyłączone)
 
-# ─── Environments ────────────────────────────────────────────────────────────
-# Each environment has:
-#   branch      — git branch to deploy from
-#   url         — live URL (used for health checks)
-#   protected   — require confirmation before deploy
-#   deploy      — deploy provider + credentials
-#   database    — database provider + credentials
-#   env         — environment variables exported before each pipeline stage
+# ─── Sekrety per środowisko ───────────────────────────────────────────────────
+# Klucze MUSZĄ odpowiadać nazwom środowisk z rnr.yaml → environments.
+# Wpisuj TYLKO tokeny i hasła — resztę konfiguruj w rnr.yaml.
 
 environments:
 
-  # ── PRODUCTION ─────────────────────────────────────────────────────────────
+  # ── PRODUKCJA ──────────────────────────────────────────────────────────────
   production:
-    branch: "main"
-    url: ""
-    protected: true
-
     deploy:
-      provider: "netlify"         # netlify | vercel | gh-pages | ssh | ftp | docker | custom
+      # ── Netlify — wpisz swój token i Site ID ──────────────────────────────
+      netlify_auth_token: ""         # Netlify → User Settings → Personal access tokens
+      netlify_site_id: ""            # Netlify → Site settings → General → Site ID
 
-      # ── Netlify ──────────────────────────────────────────────
-      netlify_auth_token: ""
-      netlify_site_id: ""
-      netlify_prod: true          # true = deploy to production URL (--prod)
-
-      # ── Vercel ───────────────────────────────────────────────
-      # provider: "vercel"
+      # ── Vercel (odkomentuj jeśli używasz Vercel) ───────────────────────────
       # vercel_token: ""
       # vercel_org_id: ""
       # vercel_project_id: ""
-      # vercel_prod: true
 
-      # ── SSH / rsync ──────────────────────────────────────────
-      # provider: "ssh"
-      # ssh_host: "myserver.com"
-      # ssh_user: "deploy"
-      # ssh_path: "/var/www/html"
+      # ── SSH — klucz prywatny ────────────────────────────────────────────────
       # ssh_key: "~/.ssh/id_rsa"
-      # ssh_source: "dist/"
 
-      # ── FTP ──────────────────────────────────────────────────
-      # provider: "ftp"
-      # ftp_host: "ftp.myserver.com"
-      # ftp_user: "ftpuser"
-      # ftp_password: ""
-      # ftp_path: "/public_html"
-      # ftp_source: "dist/"
-
-      # ── Docker ───────────────────────────────────────────────
-      # provider: "docker"
-      # docker_image: "ghcr.io/owner/myapp"
-      # docker_tag: "latest"
+      # ── Docker Registry ─────────────────────────────────────────────────────
       # docker_registry_user: ""
       # docker_registry_token: ""
-      # docker_run_cmd: "ssh deploy@myserver 'docker pull ... && docker-compose up -d'"
-
-      # ── GitHub Pages ─────────────────────────────────────────
-      # provider: "gh-pages"
-      # gh_pages_branch: "gh-pages"
-      # gh_pages_source: "dist/"
-
-      # ── Custom ───────────────────────────────────────────────
-      # provider: "custom"
-      # deploy_cmd: "./scripts/deploy.sh"
-      # rollback_cmd: "./scripts/rollback.sh"
 
     database:
-      provider: "supabase"        # supabase | prisma | postgres | mysql | none | custom
+      # ── Supabase — uzupełnij dane projektu produkcyjnego ───────────────────
+      supabase_project_ref: ""       # Supabase → Project Settings → General → Reference ID
+      supabase_db_url: ""            # Supabase → Project Settings → Database → Connection string
+      supabase_anon_key: ""          # Supabase → Project Settings → API → anon public
+      supabase_service_role_key: ""  # Supabase → Project Settings → API → service_role
 
-      # ── Supabase ─────────────────────────────────────────────
-      supabase_project_ref: ""
-      supabase_db_url: ""
-      supabase_anon_key: ""
-      supabase_service_role_key: ""
+      # ── Prisma / PostgreSQL ─────────────────────────────────────────────────
+      # db_url: "postgresql://user:password@host:5432/db"
 
-      # ── Prisma ───────────────────────────────────────────────
-      # provider: "prisma"
-      # db_url: "postgresql://user:pass@host:5432/db"
-
-      # ── Raw Postgres ─────────────────────────────────────────
-      # provider: "postgres"
-      # db_url: "postgresql://user:pass@host:5432/db"
-      # db_migrations_dir: "./migrations"
-
-      # ── MySQL ────────────────────────────────────────────────
-      # provider: "mysql"
-      # db_url: "mysql://user:pass@host:3306/db"
-      # db_migrations_dir: "./migrations"
-
-      # ── Custom ───────────────────────────────────────────────
-      # provider: "custom"
+      # ── Custom migracje ─────────────────────────────────────────────────────
       # db_migrate_cmd: "npm run db:migrate"
       # db_rollback_cmd: "npm run db:rollback"
 
-    # Environment variables exported before EVERY pipeline stage
-    env:
-      NODE_ENV: "production"
-      # VITE_APP_URL: "https://myapp.com"
-      # VITE_SUPABASE_URL: "https://ref.supabase.co"
-      # VITE_SUPABASE_ANON_KEY: ""
-
   # ── STAGING ────────────────────────────────────────────────────────────────
   staging:
-    branch: "develop"
-    url: ""
-    protected: false
-
     deploy:
-      provider: "netlify"
-      netlify_auth_token: ""
-      netlify_site_id: ""
-      netlify_prod: false
+      netlify_auth_token: ""         # Może być ten sam co production
+      netlify_site_id: ""            # INNY Site ID niż production!
 
     database:
-      provider: "supabase"
-      supabase_project_ref: ""
+      supabase_project_ref: ""       # INNY projekt Supabase niż production!
       supabase_db_url: ""
       supabase_anon_key: ""
       supabase_service_role_key: ""
-
-    env:
-      NODE_ENV: "staging"
-      # VITE_APP_URL: "https://staging.myapp.com"
-
-  # ── PREVIEW (feature branches) ─────────────────────────────────────────────
-  preview:
-    branch: ""                  # Set via: rnr deploy preview --branch feat/xyz
-    url: ""
-    protected: false
-
-    deploy:
-      provider: "netlify"
-      netlify_auth_token: ""
-      netlify_site_id: ""
-      netlify_prod: false
-
-    database:
-      provider: "none"
-
-    env:
-      NODE_ENV: "development"

@@ -123,9 +123,9 @@ func (m DashboardModel) View() string {
 func (m DashboardModel) renderHeader(width int) string {
 	projectName := ""
 	projectVersion := ""
-	if m.cfg != nil && m.cfg.Conf != nil {
-		projectName = m.cfg.Conf.Project.Name
-		projectVersion = m.cfg.Conf.Project.Version
+	if m.cfg != nil && m.cfg.Pipeline != nil {
+		projectName = m.cfg.Pipeline.Project.Name
+		projectVersion = m.cfg.Pipeline.Project.Version
 	}
 
 	left := StyleTitle.Render("⚡ rnr")
@@ -217,7 +217,7 @@ func (m DashboardModel) renderEnvSelector(width int) string {
 
 	var rows []string
 	for i, env := range m.envNames {
-		envCfg, ok := m.cfg.Conf.Environments[env]
+		envCfg, ok := m.cfg.Environments[env]
 		if !ok {
 			continue
 		}

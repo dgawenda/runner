@@ -21,7 +21,9 @@
 12. [Struktura katalogów projektu](#12-struktura-katalogów-projektu)
 13. [Nazewnictwo gałęzi Git i dzienniki wdrożeń](#13-nazewnictwo-gałęzi-git-i-dzienniki-wdrożeń)
 14. [Komendy CLI](#14-komendy-cli)
-15. [FAQ — Często zadawane pytania](#15-faq--często-zadawane-pytania)
+15. [Zarządzanie środowiskami](#15-zarządzanie-środowiskami)
+16. [Przeglądarka logów](#16-przeglądarka-logów)
+17. [FAQ — Często zadawane pytania](#17-faq--często-zadawane-pytania)
 
 ---
 
@@ -82,7 +84,7 @@ source ~/.bashrc  # lub ~/.zshrc, jeśli używasz ZSH
 A następnie sprawdzić, czy instalacja przebiegła pomyślnie:
 
 ```bash
-rnr --version
+rnr version
 ```
 
 ### Szybki start z własnym projektem (dowolne „demo”)
@@ -111,29 +113,77 @@ README nie zakłada żadnego konkretnego folderu demo — wystarczy, że wejdzie
 
 ## 3. Pierwsze uruchomienie — Setup Wizard
 
-Kiedy uruchomisz `rnr` po raz pierwszy w katalogu projektu, który nie posiada jeszcze plików konfiguracyjnych, narzędzie automatycznie uruchomi **interaktywny kreator konfiguracji (Setup Wizard)**.
+`rnr` automatycznie wykrywa stan projektu i dopasowuje działanie:
 
-```
-╔══════════════════════════════════════════════════════╗
-║          Witaj w rnr — Runner Setup Wizard           ║
-║                                                      ║
-║  Przeprowadzę Cię przez konfigurację krok po kroku.  ║
-║  Użyj klawiszy ↑↓ do nawigacji, Enter do wyboru.    ║
-╚══════════════════════════════════════════════════════╝
-```
+### Scenariusz A: Świeży projekt (brak plików konfiguracyjnych)
 
-Kreator zapyta Cię o:
+Uruchomienie `rnr` w pustym repozytorium uruchamia **pełny Setup Wizard**. Kreator zapyta Cię o:
 
 - **Nazwę projektu** i URL repozytorium GitHub
-- **Wybór dostawców** (Netlify, Supabase, GitHub Releases, własne skrypty)
-- **Dane autoryzacyjne** — tokeny API wpisywane w bezpiecznych, maskowanych polach (`*****`)
-- **Nazwy środowisk** — np. `staging` i `production`
+- **Typ projektu** — frontend (bez bazy) lub fullstack
+- **Wybór dostawcy wdrożenia** (Netlify, Vercel, SSH, Docker, własne skrypty)
+- **Konfigurację bazy danych** — Supabase, Prisma, PostgreSQL lub „Brak bazy" (frontend-only)
+- **Dane autoryzacyjne** — tokeny API wpisywane w bezpiecznych, maskowanych polach (`●●●●●`)
 
 Po zakończeniu kreatora `rnr` automatycznie:
-- Wygeneruje plik `rnr.yaml` (konfiguracja potoku — bezpieczna do commitowania)
-- Wygeneruje plik `rnr.conf.yaml` (sekrety — **nigdy nie trafia do Gita**)
-- Doda `rnr.conf.yaml` do `.gitignore` automatycznie
+- Wygeneruje `rnr.yaml` **dopasowany do Twojego projektu** (bez etapu `migrate` jeśli wybrano „Brak bazy")
+- Wygeneruje `rnr.conf.yaml` z podanymi credentials
+- Doda `rnr.conf.yaml` do `.gitignore`
 - Uruchomi główny Dashboard
+
+#### Projekt frontendowy (bez bazy danych)
+
+Jeśli w kreatorze wybierzesz **„Brak bazy"** jako dostawcę bazy danych, `rnr` wygeneruje uproszczony pipeline bez etapu migracji:
+
+```yaml
+# rnr.yaml — wygenerowany dla projektu frontendowego
+stages:
+  - name: install
+  - name: lint
+  - name: typecheck
+  - name: build
+    artifacts: dist/
+  - name: deploy         # ← Netlify / Vercel / SSH
+    type: deploy
+  - name: health
+    type: health
+```
+
+#### Automatyczne tworzenie projektu Netlify
+
+W wizardzie, po wyborze Netlify jako dostawcy, możesz wybrać:
+
+| Opcja | Kiedy używać |
+|-------|-------------|
+| **🔗 Mam już Site ID** | Projekt Netlify już istnieje — wklej ID |
+| **✨ Utwórz nowy projekt** | rnr automatycznie wywoła `netlify sites:create` |
+
+Jeśli wybierzesz „Utwórz nowy projekt", `rnr` podczas pierwszego deployu automatycznie stworzy projekt na Netlify i wypisze jego Site ID — zapisz go w `rnr.conf.yaml → netlify_site_id` na przyszłość.
+
+---
+
+### Scenariusz B: Sklonowany projekt (rnr.yaml w repo, brak rnr.conf.yaml)
+
+Gdy `rnr.yaml` jest commitowany w repozytorium (tak jak powinien być), ale brakuje `rnr.conf.yaml` (jest gitignored), `rnr` wykrywa ten stan i:
+
+1. Wyświetla **specjalny komunikat** w wizardzie: *"Wykryłem plik rnr.yaml — uzupełnij tylko swoje credentials"*
+2. Prosi tylko o tokeny i credentials (nie pyta o strukturę projektu, która jest w `rnr.yaml`)
+3. Generuje TYLKO `rnr.conf.yaml` — nie modyfikuje `rnr.yaml`
+
+```bash
+# Typowy workflow dla nowego dewelopera w projekcie:
+git clone https://github.com/moja-firma/projekt.git
+cd projekt
+rnr            # ← wykryje brak rnr.conf.yaml i przeprowadzi przez credentials wizard
+```
+
+> 💡 **Dla administratora projektu:** umieść `rnr.yaml` w repozytorium. Każdy deweloper przy pierwszym uruchomieniu `rnr` zostanie przeprowadzony przez kreator credentials — bez ponownego definiowania całej struktury potoku.
+
+---
+
+### Scenariusz C: rnr.conf.yaml istnieje, brak rnr.yaml (np. po utracie pliku)
+
+`rnr` odczytuje `rnr.conf.yaml`, wykrywa typ projektu (sprawdza czy są providery bazy danych) i **automatycznie regeneruje `rnr.yaml`** bez potrzeby uruchamiania wizarda. Następnie otwiera Dashboard.
 
 ---
 
@@ -318,79 +368,157 @@ Spinner `⠸` oznacza aktywne działanie — `rnr` **nigdy nie zamarza wizualnie
 
 ## 8. Pliki konfiguracyjne — rnr.yaml i rnr.conf.yaml
 
-### rnr.yaml — Mózg operacyjny (bezpieczny do commitowania)
-
-Ten plik zawiera definicję Twojego potoku wdrożeniowego. Jest **bezpieczny** — nie zawiera żadnych sekretów, można go commitować do repozytorium Git.
-
-```yaml
-# ╔══════════════════════════════════════════════════════════════════╗
-# ║  rnr.yaml — Konfiguracja operacyjna narzędzia rnr (Runner)      ║
-# ║                                                                  ║
-# ║  Ten plik definiuje POTOKI WDROŻENIOWE dla Twojego projektu.     ║
-# ║  Jest bezpieczny do commitowania w repozytorium Git.             ║
-# ║                                                                  ║
-# ║  Zawiera:                                                        ║
-# ║  - Definicję etapów wdrożenia (stages)                           ║
-# ║  - Wybór dostawców (netlify, supabase, github, shell)            ║
-# ║  - Logikę orchestracji (kolejność kroków)                        ║
-# ║                                                                  ║
-# ║  NIE umieszczaj tutaj tokenów API ani haseł!                     ║
-# ║  Do sekretów służy plik rnr.conf.yaml (ignorowany przez Git).    ║
-# ╚══════════════════════════════════════════════════════════════════╝
-
-project:
-  name: "moja-aplikacja"
-  repo: "https://github.com/organizacja/moja-aplikacja"
-
-stages:
-  - name: "deploy-frontend"
-    provider: "netlify"
-  - name: "deploy-database"
-    provider: "supabase"
-```
-
-### rnr.conf.yaml — Sejf dewelopera (NIGDY nie commituj!)
-
-Ten plik zawiera **wrażliwe dane** — tokeny API, hasła, klucze dostępu. `rnr` automatycznie dodaje go do `.gitignore`, więc nigdy przypadkowo nie trafi do publicznego repozytorium.
-
-```yaml
-# ╔══════════════════════════════════════════════════════════════════╗
-# ║  rnr.conf.yaml — Sejf dewelopera (PRYWATNY!)                    ║
-# ║                                                                  ║
-# ║  UWAGA: Ten plik jest automatycznie dodany do .gitignore         ║
-# ║  przez narzędzie rnr. NIGDY nie commituj tego pliku!             ║
-# ║                                                                  ║
-# ║  Zawiera:                                                        ║
-# ║  - Tokeny API (Netlify, Supabase, GitHub)                        ║
-# ║  - Klucze serwisowe baz danych                                   ║
-# ║  - Zmienne środowiskowe dla każdego środowiska                   ║
-# ║                                                                  ║
-# ║  Jeśli przypadkowo ujawnisz zawartość tego pliku,                ║
-# ║  natychmiast unieważnij wszystkie tokeny w odpowiednich          ║
-# ║  serwisach (Netlify, Supabase, GitHub Settings).                 ║
-# ╚══════════════════════════════════════════════════════════════════╝
-
-environments:
-  - name: "production"
-    deploy:
-      netlify_auth_token: "nfp_twoj_token_tutaj"
-      netlify_site_id: "uuid-twojej-strony"
-      netlify_prod: true
-    database:
-      supabase_project_ref: "twoj-projekt-ref"
-      supabase_service_role_key: "eyJhbGciOiJIUzI1NiIs..."
-```
-
-### Dlaczego dwa pliki zamiast jednego?
-
-To celowy podział bezpieczeństwa:
+### Podział odpowiedzialności
 
 | Cecha | `rnr.yaml` | `rnr.conf.yaml` |
 |-------|-----------|-----------------|
-| Commitowanie do Git | ✅ Bezpieczne | ❌ Zabronione |
-| Zawartość | Logika potoku | Sekrety i tokeny |
-| Udostępnianie w zespole | ✅ Tak | ❌ Nigdy |
+| Commitowanie do Git | ✅ **Tak** | ❌ Nigdy |
+| Zawartość | Projekt + środowiska + pipeline | Wyłącznie tokeny i hasła |
+| Udostępnianie w zespole | ✅ Każdy widzi | ❌ Prywatny per developer |
 | Generowany przez Wizard | ✅ Tak | ✅ Tak |
+| Ochrona `.gitignore` | Nie potrzebna | ✅ Automatyczna |
+
+---
+
+### rnr.yaml — Projekt, środowiska i pipeline (bezpieczny do commitowania)
+
+Plik definiuje **całą konfigurację projektu bez żadnych sekretów**. Commituj go do repozytorium — dzięki temu każdy developer w zespole widzi tę samą strukturę wdrożeń.
+
+```yaml
+# ─── Projekt ─────────────────────────────────────────────────────────────────
+project:
+  name: "moja-aplikacja"
+  version: "1.0.0"
+  repo: "moja-firma/moja-aplikacja"
+
+# ─── Środowiska (BEZ tokenów!) ────────────────────────────────────────────────
+# Każde środowisko definiuje: gałąź, URL, dostawców i zmienne środowiskowe.
+# Tokeny i hasła → WYŁĄCZNIE rnr.conf.yaml
+
+environments:
+
+  production:
+    branch: "master"
+    url: "https://moja-aplikacja.com"
+    protected: true      # ⚠️ wymaga potwierdzenia przed deploym
+
+    deploy:
+      provider: "netlify"
+      netlify_prod: true # true = --prod (produkcyjny URL Netlify)
+
+    database:
+      provider: "supabase"
+
+    env:
+      NODE_ENV: "production"
+
+  staging:
+    branch: "develop"
+    url: ""
+    protected: false
+
+    deploy:
+      provider: "netlify"
+      netlify_prod: false
+
+    database:
+      provider: "supabase"
+
+    env:
+      NODE_ENV: "staging"
+
+# ─── Etapy potoku ─────────────────────────────────────────────────────────────
+stages:
+
+  - name: install
+    run: npm ci
+
+  - name: lint
+    run: npm run lint
+    allow_failure: true
+
+  - name: build
+    run: npm run build
+    artifacts: dist/
+
+  - name: migrate          # pomiń jeśli nie używasz bazy danych
+    type: database
+    only: [production, staging]
+
+  - name: deploy
+    type: deploy
+
+  - name: health
+    type: health
+    allow_failure: true
+```
+
+> 💡 **Wskazówka dla projektu frontendowego (bez bazy):** Usuń lub zakomentuj etap `migrate` i ustaw `database.provider: "none"` w każdym środowisku. Wizard zrobi to automatycznie jeśli wybierzesz „Brak bazy".
+
+---
+
+### rnr.conf.yaml — Sejf Sekretów (NIE COMMITOWAĆ!)
+
+Plik zawiera **wyłącznie wrażliwe dane** — tokeny API, hasła, klucze bazy danych. `rnr` automatycznie dodaje go do `.gitignore`. **Każdy developer trzyma własną kopię lokalnie** z własnymi tokenami.
+
+```yaml
+# Opcjonalne nadpisanie autora wdrożenia
+project:
+  actor: ""           # puste = używa git config user.name
+  actor_email: ""
+
+# Webhooki (np. Slack)
+notifications:
+  slack_webhook: ""
+
+# ─── Sekrety per środowisko ────────────────────────────────────────────────
+# Klucze MUSZĄ odpowiadać nazwom środowisk z rnr.yaml → environments.
+
+environments:
+
+  production:
+    deploy:
+      netlify_auth_token: "nfp_TWOJ_TOKEN"   # Netlify → User Settings → PAT
+      netlify_site_id: "uuid-twojej-strony"  # Netlify → Site → General → Site ID
+
+    database:
+      supabase_project_ref: "abcdefghijklmn" # Supabase → Project Settings → General
+      supabase_db_url: "postgresql://postgres:[HASLO]@db.xxx.supabase.co:5432/postgres"
+      supabase_anon_key: "eyJhbGciOiJIUzI1..."
+      supabase_service_role_key: "eyJhbGciOiJIUzI1..."
+
+  staging:
+    deploy:
+      netlify_auth_token: "nfp_TWOJ_TOKEN"   # Może być ten sam token
+      netlify_site_id: "uuid-INNEJ-strony"   # ALE inny Site ID!
+
+    database:
+      supabase_project_ref: "inny-ref-staging"   # INNY projekt Supabase!
+      supabase_db_url: "postgresql://..."
+      supabase_anon_key: "eyJhbGciOiJIUzI1..."
+      supabase_service_role_key: "eyJhbGciOiJIUzI1..."
+```
+
+### Przepływ ładowania konfiguracji
+
+Przy starcie `rnr` scala oba pliki w pamięci:
+
+```
+rnr.yaml                    rnr.conf.yaml
+┌─────────────────┐         ┌─────────────────────┐
+│ environments:   │         │ environments:        │
+│   production:   │         │   production:        │
+│     branch: ...│  merge  │     deploy:          │
+│     deploy:     │ ──────► │       netlify_token  │
+│       provider  │         │     database:        │
+│     database:   │         │       supabase_url   │
+│       provider  │         └─────────────────────┘
+└─────────────────┘
+         ↓
+   Merged Environment (używany przez providers, TUI)
+```
+
+Tokeny nigdy nie opuszczają pamięci programu w postaci jawnego tekstu — są maskowane w logach i `STDOUT`.
 
 ---
 
@@ -419,17 +547,25 @@ Jeśli w Setup Wizard wybierzesz Netlify jako dostawcę deployu, pojawi się dod
   - **Mam już Site ID** — wklejasz istniejące `netlify_site_id` z panelu Netlify,
   - **Utwórz nowy projekt** — `rnr` sam wywoła `netlify sites:create` i założy nowy projekt.
 
-Wygenerowany fragment `rnr.conf.yaml` może wyglądać tak:
+Wygenerowany fragment konfiguracji po wyborze "Utwórz nowy projekt":
 
+**rnr.yaml** (ustawienia bez sekretów):
 ```yaml
 environments:
   production:
     deploy:
       provider: "netlify"
+      netlify_prod: true    # produkcyjny URL
+```
+
+**rnr.conf.yaml** (tylko tokeny):
+```yaml
+environments:
+  production:
+    deploy:
       netlify_auth_token: "nfp_twój_token"
       netlify_site_id: ""               # zostanie uzupełnione po pierwszym deployu
-      netlify_prod: true
-      netlify_create_new: true          # rnr utworzy projekt automatycznie
+      netlify_create_new: true          # rnr sam wywoła netlify sites:create
 ```
 
 Przy pierwszym `rnr deploy`:
@@ -628,33 +764,167 @@ rnr
 
 # Inicjalizacja nowego projektu (Setup Wizard)
 rnr init
+rnr init --force     # nadpisz istniejącą konfigurację
 
-# Wdrożenie na konkretne środowisko
-rnr deploy --env production
-rnr deploy --env staging
+# Wdrożenie na konkretne środowisko (otwiera TUI)
+rnr deploy production
+rnr deploy staging
 
-# Przepchnięcie migracji bazy danych między środowiskami
-rnr promote --from staging --to production
+# Rollback do poprzedniego wdrożenia (otwiera TUI)
+rnr rollback production
 
-# Rollback do poprzedniego wdrożenia
-rnr rollback --env production
+# Przepchnięcie migracji bazy danych staging → production (otwiera TUI)
+rnr promote
 
-# Wyświetlenie historii wdrożeń
-rnr history
-
-# Wyświetlenie logów ostatniego wdrożenia
-rnr logs --env production
+# Wyświetlenie logów ostatniego wdrożenia (terminal, bez TUI)
+rnr logs
+rnr logs production       # tylko logi dla środowiska production
+rnr logs -n 100           # ostatnie 100 linii
 
 # Sprawdzenie wersji narzędzia
-rnr --version
+rnr version
+
+# Uruchomienie z konkretnym katalogiem projektu
+rnr --dir /ścieżka/do/projektu
 
 # Wyświetlenie pomocy
 rnr --help
+rnr env --help
 ```
+
+### Skróty klawiaturowe w Dashboard TUI
+
+| Klawisz | Akcja |
+|---------|-------|
+| `D` | Wdróż na wybrane środowisko |
+| `R` | Rollback — przywróć poprzednią wersję |
+| `P` | Promote — migracje DB staging → production |
+| `L` | Otwórz przeglądarkę logów |
+| `↑ / ↓` | Zmień wybrane środowisko |
+| `Q` / `Ctrl+C` | Wyjdź z rnr |
 
 ---
 
-## 15. FAQ — Często zadawane pytania
+## 15. Zarządzanie środowiskami
+
+`rnr` obsługuje wiele środowisk w jednym projekcie. Środowiska definiujesz w `rnr.conf.yaml` w sekcji `environments`.
+
+### Dodawanie nowego środowiska
+
+```bash
+# Dodaj środowisko lokalne
+rnr env add local
+
+# Dodaj środowisko dev
+rnr env add dev
+
+# Dodaj staging na bazie szablonu z production
+rnr env add staging --from production
+
+# Wylistuj wszystkie środowiska
+rnr env list
+```
+
+Po uruchomieniu `rnr env add local` do `rnr.conf.yaml` zostanie dopisany blok:
+
+```yaml
+environments:
+
+  # ── LOCAL ──────────────────────────────────────────────────────────────
+  local:
+    branch: "master"
+    url: ""
+    protected: false
+
+    deploy:
+      provider: "netlify"
+      netlify_auth_token: ""   # ← uzupełnij swój token
+      netlify_site_id: ""      # ← uzupełnij Site ID dla local
+      netlify_prod: false
+
+    database:
+      provider: "none"
+
+    env:
+      NODE_ENV: "development"
+```
+
+Uzupełnij puste wartości (`netlify_auth_token`, `netlify_site_id`) i uruchom `rnr` — nowe środowisko pojawi się w Dashboard.
+
+### Inicjalizacja środowisk production i dev od razu
+
+Gdy tworzysz nowy projekt i chcesz od razu zainicjować wszystkie podstawowe środowiska:
+
+```bash
+rnr init                    # 1. Wizard skonfiguruje production
+rnr env add staging         # 2. Dodaj staging
+rnr env add local           # 3. Dodaj local (do testowania bez wdrożenia)
+```
+
+### Zalecana konfiguracja gałęzi
+
+| Środowisko | Gałąź Git | Czy chronione? |
+|------------|-----------|----------------|
+| `production` | `master` | ✅ Tak |
+| `staging` | `develop` | ❌ Nie |
+| `local` / `dev` | `master` lub `feature/*` | ❌ Nie |
+| `preview` | dowolna | ❌ Nie |
+
+---
+
+## 16. Przeglądarka logów
+
+`rnr` zawiera wbudowaną interaktywną przeglądarkę logów dostępną z poziomu Dashboard.
+
+### Uruchamianie
+
+W głównym Dashboard wciśnij klawisz **`L`** — otworzy się przeglądarka logów.
+
+```
+📄 Logi wdrożeń
+──────────────────────────────────────────────────────────────────
+▶ production_20260310-143022.log    10.03.2026 14:30:22  12.4KB
+  staging_20260309-091500.log       09.03.2026 09:15:00   8.7KB
+  rollback_production_20260308.log  08.03.2026 17:59:32   3.2KB
+
+──────────────────────────────────────────────────────────────────
+  ENTER Otwórz   ↑↓ Nawigacja   R Odśwież   ESC Dashboard
+```
+
+### Podgląd zawartości logu
+
+Po naciśnięciu `ENTER` na wybranym pliku:
+
+```
+📄 production_20260310-143022.log
+──────────────────────────────────────────────────────────────────
+    1 │ [2026-03-10 14:30:22] ▶ ETAP: install
+    2 │ npm ci
+    3 │ ✓ Zainstalowano 247 pakietów (12.4s)
+    4 │ [2026-03-10 14:30:34] ▶ ETAP: build
+    5 │ npm run build
+    6 │ ✅ Build zakończony — dist/ (1.8MB)
+    7 │ [2026-03-10 14:30:51] ▶ ETAP: deploy
+    8 │ ✓ Netlify: wdrożono na https://mój-projekt.netlify.app
+
+──────────────────────────────────────────────────────────────────
+  ↑↓ Linia   PgUp/PgDn Strona   g/G Pocz./Koniec   ESC Lista
+```
+
+### Kolorowanie logów
+
+| Kolor | Znaczenie |
+|-------|-----------|
+| 🟢 Zielony | Sukces (`✓`, `✅`, `SUCCESS`) |
+| 🔴 Czerwony | Błąd (`✗`, `[ERROR]`) |
+| 🟡 Żółty | Ostrzeżenie (`⚠`, `[WARN]`) |
+| 🔵 Niebieski | Etap potoku (`▶`, `ETAP`) |
+
+> 💡 Możesz też przeglądać logi bez TUI: `rnr logs production`
+
+---
+
+## 17. FAQ — Często zadawane pytania
 
 **Q: Co zrobić, jeśli wdrożenie się nie powiedzie w połowie?**  
 A: Uruchom `rnr rollback --env <środowisko>` lub wybierz opcję "Rollback" w Dashboard (`R`). `rnr` przywróci kod do stanu sprzed wdrożenia.
@@ -669,13 +939,25 @@ A: Skontaktuj się z administratorem systemu. Możesz też wygenerować nowy tok
 A: Tak! Możesz skonfigurować własne polecenia wdrożeniowe za pomocą `shell` provider. W `rnr.conf.yaml` zdefiniuj `deploy_cmd` z dowolnym poleceniem bash.
 
 **Q: Jak dodać nowego dewelopera do zespołu?**  
-A: Niech nowy deweloper uruchomi skrypt instalacyjny z tokenem GitHub, a następnie **ręcznie skopiuj mu zawartość `rnr.conf.yaml`** (przez bezpieczny kanał — nigdy przez Git!). Po skopiowaniu pliku wystarczy uruchomić `rnr`.
+A: Nowy deweloper klonuje repozytorium i uruchamia `rnr`. Narzędzie automatycznie wykryje że `rnr.yaml` istnieje (w repo), ale brak `rnr.conf.yaml` (gitignored) i uruchomi kreator credentials. Każdy deweloper wpisuje swoje własne tokeny.
+
+**Q: Mam tylko frontend — czy muszę konfigurować bazę danych?**  
+A: Nie! W Setup Wizard wybierz **„Brak bazy"** jako dostawcę bazy danych. `rnr` wygeneruje uproszczony pipeline bez etapu `migrate`. Nie musisz wpisywać żadnych danych Supabase/PostgreSQL.
+
+**Q: Jak dodać nowe środowisko, np. „local" lub „dev"?**  
+A: Użyj komendy `rnr env add local` lub `rnr env add dev`. Polecenie dopisze nowe środowisko do `rnr.conf.yaml` na bazie szablonu. Następnie uzupełnij credentials dla nowego środowiska i uruchom `rnr` — pojawi się w Dashboard.
 
 **Q: Co to znaczy, że repozytorium jest „brudne"?**  
 A: Oznacza to, że masz zmiany w plikach, które nie zostały jeszcze zacommitowane do Gita. `rnr` to wykryje i poprosi Cię o zacommitowanie zmian przed wdrożeniem.
 
 **Q: Gdzie mogę zobaczyć co poszło nie tak przy ostatnim wdrożeniu?**  
-A: Pliki logów znajdziesz w `.rnr/logs/`. Możesz też użyć komendy `rnr logs --env production`, która wyświetli ostatni log w Twoim terminalu.
+A: Wciśnij `L` w Dashboard — otworzy się interaktywna przeglądarka logów. Możesz też użyć terminala: `rnr logs production`.
+
+**Q: Czy logi zawierają moje tokeny i hasła?**  
+A: Nie. `rnr` automatycznie maskuje wszystkie sekrety z `rnr.conf.yaml` w logach. W pliku logu zamiast rzeczywistego tokenu znajdziesz `***`.
+
+**Q: Nie mam site ID Netlify — jak stworzyć nowy projekt?**  
+A: W Setup Wizard przy konfiguracji Netlify wybierz opcję **„✨ Utwórz nowy projekt"**. Podczas pierwszego deployu `rnr` automatycznie wywoła `netlify sites:create` i poda Ci nowe Site ID. Zapisz je w `rnr.conf.yaml → netlify_site_id` na przyszłe użycie.
 
 ---
 

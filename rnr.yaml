@@ -1,27 +1,78 @@
-# rnr.yaml — Pipeline Definition
-# ✅ SAFE TO COMMIT — no secrets here
-# Secrets and credentials live in rnr.conf.yaml (gitignored)
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  rnr.yaml — Konfiguracja Projektu i Potoku Wdrożeniowego               ║
+# ║  Projekt: runner                                                         ║
+# ║                                                                          ║
+# ║  ✅ BEZPIECZNY DO COMMITOWANIA — brak tokenów i haseł                  ║
+# ║  🔒 Tokeny i credentials WYŁĄCZNIE w rnr.conf.yaml (gitignored)        ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+# ─── Projekt ─────────────────────────────────────────────────────────────────
+project:
+  name: "runner"
+  version: "1.1.0"
+  repo: "dgawenda/runner"
+
+# ─── Środowiska ──────────────────────────────────────────────────────────────
+# Definicje środowisk BEZ tokenów i haseł.
+# Tokeny i credentials dla każdego środowiska → rnr.conf.yaml → environments.
+
+environments:
+
+  # ── PRODUKCJA ──────────────────────────────────────────────────────────────
+  production:
+    branch: "master"
+    url: ""
+    protected: true       # ⚠️  Wymaga potwierdzenia przed wdrożeniem
+
+    deploy:
+      provider: "netlify"
+      netlify_prod: true  # true = wdróż na produkcyjny URL (--prod)
+
+    database:
+      provider: "supabase"
+
+    env:
+      NODE_ENV: "production"
+
+  # ── STAGING ────────────────────────────────────────────────────────────────
+  staging:
+    branch: "develop"
+    url: ""
+    protected: false
+
+    deploy:
+      provider: "netlify"
+      netlify_prod: false
+
+    database:
+      provider: "supabase"
+
+    env:
+      NODE_ENV: "staging"
+
+# ─── Etapy Potoku Wdrożeniowego ───────────────────────────────────────────────
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  TYPY ETAPÓW:
+#    (brak)     — komenda powłoki z pola 'run'
+#    database   — migracja bazy (dostawca z environments.X.database.provider)
+#    deploy     — wdrożenie    (dostawca z environments.X.deploy.provider)
+#    health     — sprawdzenie dostępności URL
 #
-# Stage types:
-#   (default)  — run the 'run' command
-#   database   — handled by the database provider (from rnr.conf.yaml)
-#   deploy     — handled by the deploy provider  (from rnr.conf.yaml)
-#   health     — auto health check against environment url
-#
-# Stage fields:
-#   name          required  stage identifier (used in --skip / --only)
-#   run           optional  shell command to execute
-#   type          optional  database | deploy | health
-#   allow_failure optional  true = warn but continue on failure
-#   only          optional  list of environments that run this stage
+#  POLA ETAPU:
+#    name          [wymagane]  unikalny identyfikator
+#    run           [opcjonalne] komenda powłoki
+#    type          [opcjonalne] database | deploy | health
+#    allow_failure [opcjonalne] true = nie przerywaj potoku przy błędzie
+#    only          [opcjonalne] lista środowisk (np. [production, staging])
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 stages:
 
-  # ── Install dependencies ─────────────────────────────────────────────────
+  # ── Instalacja zależności ──────────────────────────────────────────────────
   - name: install
     run: npm ci
 
-  # ── Code quality ─────────────────────────────────────────────────────────
+  # ── Jakość kodu ───────────────────────────────────────────────────────────
   - name: lint
     run: npm run lint
     allow_failure: true
@@ -30,8 +81,7 @@ stages:
     run: npx tsc --noEmit
     allow_failure: true
 
-  # ── Tests ─────────────────────────────────────────────────────────────────
-  # Provisional tests — adapt to your test runner (vitest, jest, playwright)
+  # ── Testy ─────────────────────────────────────────────────────────────────
   - name: test:unit
     run: npm run test:unit -- --run --passWithNoTests
     allow_failure: true
@@ -46,16 +96,20 @@ stages:
     run: npm run build
     artifacts: dist/
 
-  # ── Database migrations ───────────────────────────────────────────────────
+  # ── Migracje bazy danych ──────────────────────────────────────────────────
+  # Dostawca konfigurowany w environments.X.database
+  # Credentials (hasła, klucze) → rnr.conf.yaml
   - name: migrate
     type: database
     only: [production, staging]
 
-  # ── Deploy ────────────────────────────────────────────────────────────────
+  # ── Wdrożenie ─────────────────────────────────────────────────────────────
+  # Dostawca konfigurowany w environments.X.deploy
+  # Tokeny API → rnr.conf.yaml
   - name: deploy
     type: deploy
 
-  # ── Health check ──────────────────────────────────────────────────────────
+  # ── Sprawdzenie zdrowia aplikacji ─────────────────────────────────────────
   - name: health
     type: health
     allow_failure: true

@@ -47,6 +47,7 @@ const (
 	ScreenPromote                 // Ekran promote (migracje DB)
 	ScreenLogs                    // Przeglądarka logów
 	ScreenError                   // Ekran błędu
+	ScreenEnvAdd                  // Kreator dodawania nowego środowiska
 )
 
 // ─── Wiadomości wewnętrzne pipeline ───────────────────────────────────────
@@ -119,6 +120,9 @@ type RootModel struct {
 	// Promote
 	promoteSource string
 	promoteTarget string
+
+	// Przeglądarka logów
+	logs LogsModel
 }
 
 // ─── Inicjalizacja ────────────────────────────────────────────────────────
@@ -175,7 +179,10 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConfigLoadedMsg:
 		m.loading = false
 		if msg.Err != nil {
-			m.wizard = NewWizardModel(m.width, m.height)
+			// hasPipeline=true oznacza: rnr.yaml jest (sklonowane repo), brak conf.yaml
+			// W nowej strukturze to najczęstszy scenariusz "nowy developer w projekcie"
+			hasPipeline, _ := config.Exists(m.projectRoot)
+			m.wizard = NewWizardModelWithFlags(m.width, m.height, hasPipeline)
 			m.screen = ScreenWizard
 			cmds = append(cmds, m.wizard.Init())
 		} else {
@@ -368,6 +375,16 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.deploy, cmd = m.deploy.Update(msg)
 		cmds = append(cmds, cmd)
+	case ScreenLogs:
+		var cmd tea.Cmd
+		m.logs, cmd = m.logs.Update(msg)
+		cmds = append(cmds, cmd)
+		// ESC na liście logów wraca do Dashboard
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			if !m.logs.viewing && (keyMsg.String() == "esc" || keyMsg.String() == "q") {
+				m.screen = ScreenDashboard
+			}
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -388,6 +405,8 @@ func (m *RootModel) View() string {
 		return m.viewConfirm()
 	case ScreenPromote:
 		return m.deploy.View()
+	case ScreenLogs:
+		return m.logs.View()
 	case ScreenError:
 		return m.viewError()
 	default:
@@ -503,6 +522,8 @@ func (m *RootModel) handleDashboardKeys(msg tea.KeyMsg) tea.Cmd {
 		return m.cmdInitRollback(selectedEnv)
 	case "p", "P":
 		return m.cmdInitPromote()
+	case "l", "L":
+		return m.cmdOpenLogs()
 	}
 	return nil
 }
@@ -512,9 +533,25 @@ func (m *RootModel) handleDashboardKeys(msg tea.KeyMsg) tea.Cmd {
 func (m *RootModel) cmdLoadConfig() tea.Cmd {
 	return func() tea.Msg {
 		hasPipeline, hasConf := config.Exists(m.projectRoot)
-		if !hasPipeline || !hasConf {
+
+		// Brak obu plików → pełny wizard
+		if !hasPipeline && !hasConf {
 			return ConfigLoadedMsg{Err: fmt.Errorf("brak pliku konfiguracyjnego")}
 		}
+
+		// conf istnieje, ale brak pipeline → pokaż wizard (conf nowej struktury
+		// zawiera TYLKO sekrety, nie ma informacji o środowiskach/dostawcach)
+		if hasConf && !hasPipeline {
+			// Nie można auto-wygenerować rnr.yaml z samych sekretów.
+			// Uruchamiamy wizard z flagą hasExistingConf=false (pełna konfiguracja).
+			return ConfigLoadedMsg{Err: fmt.Errorf("brak pliku rnr.yaml")}
+		}
+
+		// Brak conf → pokaż wizard (rnr.yaml może istnieć — np. świeży clone repo)
+		if !hasConf {
+			return ConfigLoadedMsg{Err: fmt.Errorf("brak pliku rnr.conf.yaml")}
+		}
+
 		cfg, err := config.Load(m.projectRoot)
 		if err != nil {
 			return ConfigLoadedMsg{Err: err}
@@ -544,20 +581,32 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 		if err := config.EnsureRnrDir(m.projectRoot); err != nil {
 			return ErrorMsg{Title: "Błąd katalogu", Message: err.Error(), Err: err}
 		}
+
+		// rnr.yaml — generuj tylko jeśli nie istnieje (w nowej strukturze: projekt + środowiska + stages)
 		pipelinePath := filepath.Join(m.projectRoot, config.PipelineFile)
 		if _, err := os.Stat(pipelinePath); os.IsNotExist(err) {
-			content := config.DefaultPipelineYAML(w.ProjectName)
+			hasDB := w.DBProv != "" && w.DBProv != "none"
+			content := config.DefaultPipelineYAMLFromWizard(
+				w.ProjectName, w.Repo,
+				w.DeployProv, w.DBProv,
+				hasDB,
+			)
 			if err := os.WriteFile(pipelinePath, []byte(content), 0o644); err != nil {
-				return ErrorMsg{Title: "Błąd zapisu", Message: err.Error(), Err: err}
+				return ErrorMsg{Title: "Błąd zapisu rnr.yaml", Message: err.Error(), Err: err}
 			}
 		}
+
+		// rnr.conf.yaml — TYLKO sekrety (zawsze nadpisz jeśli wizard go generuje)
 		confPath := filepath.Join(m.projectRoot, config.ConfFile)
-		content := config.DefaultConfYAMLFromWizard(w.ProjectName, w.Repo,
+		confContent := config.DefaultConfYAMLFromWizard(
+			w.ProjectName, w.Repo,
 			w.DeployProv, w.NetlifyToken, w.NetlifySiteID, w.NetlifyCreateNew,
-			w.DBProv, w.SupabaseRef, w.SupabaseURL, w.SupabaseKey)
-		if err := os.WriteFile(confPath, []byte(content), 0o600); err != nil {
-			return ErrorMsg{Title: "Błąd zapisu", Message: err.Error(), Err: err}
+			w.DBProv, w.SupabaseRef, w.SupabaseURL, w.SupabaseKey,
+		)
+		if err := os.WriteFile(confPath, []byte(confContent), 0o600); err != nil {
+			return ErrorMsg{Title: "Błąd zapisu rnr.conf.yaml", Message: err.Error(), Err: err}
 		}
+
 		_ = config.EnsureGitignore(m.projectRoot)
 		return NavigateMsg{Screen: ScreenDashboard}
 	}
@@ -580,7 +629,7 @@ func (m *RootModel) cmdInitDeploy(envName string) tea.Cmd {
 				Err: fmt.Errorf("brudne repozytorium"),
 			}
 		}
-		if env, ok := m.cfg.Conf.Environments[envName]; ok && env.Protected {
+		if env, ok := m.cfg.Environments[envName]; ok && env.Protected {
 			return ConfirmDeployMsg{Env: envName}
 		}
 		return DeployStartMsg{Env: envName}
@@ -627,6 +676,15 @@ func (m *RootModel) cmdInitPromote() tea.Cmd {
 			}
 		}
 		return PromoteStartMsg{SourceEnv: "staging", TargetEnv: "production"}
+	}
+}
+
+func (m *RootModel) cmdOpenLogs() tea.Cmd {
+	return func() tea.Msg {
+		logsDir := filepath.Join(m.projectRoot, config.LogsDir)
+		m.logs = NewLogsModel(m.width, m.height, logsDir)
+		m.screen = ScreenLogs
+		return nil
 	}
 }
 
@@ -720,7 +778,7 @@ func (m *RootModel) cmdRunPipeline(envName string, stages []config.Stage, ch cha
 			defer log.Close()
 		}
 
-		envCfg := m.cfg.Conf.Environments[envName]
+		envCfg := m.cfg.Environments[envName]
 
 		// Krok 3: Wykonaj etapy
 		for i, stage := range stages {
@@ -850,7 +908,7 @@ func (m *RootModel) cmdExecuteRollback(msg RollbackStartMsg) tea.Cmd {
 		}
 
 		// Redeploy przywróconej wersji
-		envCfg, ok := m.cfg.Conf.Environments[msg.Env]
+		envCfg, ok := m.cfg.Environments[msg.Env]
 		if !ok {
 			return RollbackFailedMsg{Err: fmt.Errorf("środowisko %q nie istnieje", msg.Env)}
 		}
@@ -890,8 +948,8 @@ func (m *RootModel) cmdExecutePromote(msg PromoteStartMsg) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 
-		sourceEnv := m.cfg.Conf.Environments[msg.SourceEnv]
-		targetEnv := m.cfg.Conf.Environments[msg.TargetEnv]
+		sourceEnv := m.cfg.Environments[msg.SourceEnv]
+		targetEnv := m.cfg.Environments[msg.TargetEnv]
 
 		masker := logger.NewMasker(m.cfg.AllSecrets()...)
 		log, _ := logger.NewForDeployment(

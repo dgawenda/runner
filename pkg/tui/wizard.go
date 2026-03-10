@@ -100,16 +100,26 @@ type WizardModel struct {
 	supabaseURL   string
 	supabaseKey   string
 
+	// Tryb "fresh clone" — rnr.yaml istnieje, brak conf
+	hasExistingConf bool
+
 	// Błędy walidacji
 	validationErr string
 }
 
 // NewWizardModel tworzy nowy model wizarda.
 func NewWizardModel(width, height int) WizardModel {
+	return NewWizardModelWithFlags(width, height, false)
+}
+
+// NewWizardModelWithFlags tworzy model wizarda ze wskaźnikiem czy conf już istnieje.
+// hasExistingConf=true gdy rnr.yaml jest obecny ale brak rnr.conf.yaml (np. po git clone).
+func NewWizardModelWithFlags(width, height int, hasExistingConf bool) WizardModel {
 	m := WizardModel{
-		step:   wizardStepWelcome,
-		width:  width,
-		height: height,
+		step:            wizardStepWelcome,
+		width:           width,
+		height:          height,
+		hasExistingConf: hasExistingConf,
 	}
 	m.initInputs()
 	return m
@@ -241,25 +251,45 @@ func (m WizardModel) View() string {
 func (m WizardModel) viewWelcome() string {
 	maxW := min(m.width-4, 72)
 
-	title := StyleTitle.Render("🚀 Witaj w rnr — Kreator Konfiguracji")
+	var title, welcomeText, noteText string
+
+	if m.hasExistingConf {
+		// Sytuacja: sklonowany repo — jest rnr.yaml, brak rnr.conf.yaml
+		title = StyleTitle.Render("🔑 rnr — Uzupełnij Credentials")
+		welcomeText = "Wykryłem plik rnr.yaml w tym projekcie.\n\n" +
+			"Brakuje jednak pliku rnr.conf.yaml z Twoimi tokenami\n" +
+			"(jest gitignored — każdy developer trzyma swój lokalnie).\n\n" +
+			"Uzupełnię Twój plik rnr.conf.yaml krok po kroku:\n\n" +
+			"  • Podasz dostawcę wdrożenia i token\n" +
+			"  • Opcjonalnie skonfigurujesz bazę danych\n" +
+			"  • Wygeneruję TYLKO rnr.conf.yaml (lokalnie)"
+		noteText = "ℹ️  Pipeline (rnr.yaml) już istnieje — nie zostanie nadpisany"
+	} else {
+		// Sytuacja: świeży projekt, brak obu plików
+		title = StyleTitle.Render("🚀 Witaj w rnr — Kreator Konfiguracji")
+		welcomeText = "Nie znalazłem pliku konfiguracyjnego rnr.conf.yaml.\n\n" +
+			"Przeprowadzę Cię przez szybką konfigurację:\n\n" +
+			"  • Wybierzesz dostawcę wdrożenia (np. Netlify)\n" +
+			"  • Opcjonalnie skonfigurujesz bazę danych\n" +
+			"  • Wygeneruję pliki konfiguracyjne automatycznie\n\n" +
+			"Hasła i tokeny są MASKOWANE — nigdy nie trafią do logów."
+		noteText = "✅ Plik rnr.conf.yaml zostanie automatycznie dodany do .gitignore"
+	}
 
 	welcome := lipgloss.NewStyle().
 		Foreground(ColorText).
 		Width(maxW - 4).
-		Render(
-			"Nie znalazłem pliku konfiguracyjnego rnr.conf.yaml.\n\n" +
-				"Przeprowadzę Cię przez szybką konfigurację:\n\n" +
-				"  • Wybierzesz dostawcę wdrożenia (np. Netlify)\n" +
-				"  • Opcjonalnie skonfigurujesz bazę danych\n" +
-				"  • Wygeneruję pliki konfiguracyjne automatycznie\n\n" +
-				"Hasła i tokeny są MASKOWANE — nigdy nie trafią do logów.",
-		)
+		Render(welcomeText)
 
+	noteColor := ColorSuccess
+	if m.hasExistingConf {
+		noteColor = ColorInfo
+	}
 	note := lipgloss.NewStyle().
-		Foreground(ColorSuccess).
+		Foreground(noteColor).
 		Italic(true).
 		Width(maxW - 4).
-		Render("✅ Plik rnr.conf.yaml zostanie automatycznie dodany do .gitignore")
+		Render(noteText)
 
 	keyHint := StyleMuted.Render("\n  Naciśnij ENTER aby rozpocząć • ESC aby anulować")
 
