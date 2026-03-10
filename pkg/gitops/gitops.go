@@ -54,6 +54,9 @@ type DirtyFile struct {
 type StatusResult struct {
 	// IsClean — true jeśli repozytorium jest czyste i gotowe do wdrożenia.
 	IsClean bool
+	// IsGitRepo — true jeśli katalog jest repozytorium Git.
+	// Projekty bez Git (plain HTML) mają IsGitRepo=false — nie blokują wdrożenia.
+	IsGitRepo bool
 	// DirtyFiles — lista brudnych plików jeśli repozytorium nie jest czyste.
 	DirtyFiles []DirtyFile
 	// Branch — aktualna gałąź.
@@ -94,6 +97,7 @@ func AuditRepo(workdir string) (*StatusResult, error) {
 
 	return &StatusResult{
 		IsClean:    len(dirty) == 0,
+		IsGitRepo:  true,
 		DirtyFiles: dirty,
 		Branch:     branch,
 		LastCommit: *commit,
@@ -242,6 +246,44 @@ func FormatRollbackCommitMessage(env string, targetCommit CommitInfo) string {
 func FetchOrigin(workdir string) error {
 	_, err := runGit(workdir, "fetch", "--tags", "origin")
 	return err
+}
+
+// CheckoutBranch przełącza na podaną gałąź.
+// Jeśli gałąź nie istnieje lokalnie, próbuje śledzić zdalną (origin/<branch>).
+// Zwraca nil jeśli gałąź już jest aktywna.
+func CheckoutBranch(workdir, branch string) error {
+	// Sprawdź bieżącą gałąź — jeśli już tam jesteśmy, nic nie rób
+	current, err := GetCurrentBranch(workdir)
+	if err != nil {
+		return fmt.Errorf("nie można odczytać bieżącej gałęzi: %w", err)
+	}
+	if current == branch {
+		return nil // już na właściwej gałęzi
+	}
+
+	// Sprawdź czy gałąź istnieje lokalnie
+	localExists, _ := BranchExists(workdir, branch)
+	if localExists {
+		_, err = runGit(workdir, "checkout", branch)
+		return err
+	}
+
+	// Próba: śledź zdalną gałąź origin/<branch>
+	_, err = runGit(workdir, "checkout", "-b", branch, "--track", "origin/"+branch)
+	if err != nil {
+		return fmt.Errorf("nie można przełączyć na gałąź '%s': %w\nUpewnij się że gałąź istnieje lokalnie lub na origin.", branch, err)
+	}
+	return nil
+}
+
+// PullBranch pobiera i merguje zmiany z origin/<branch>.
+// Błąd jest niekriytyczny (np. brak połączenia, brak remota) — logujemy ostrzeżenie.
+func PullBranch(workdir, branch string) error {
+	_, err := runGit(workdir, "pull", "origin", branch, "--ff-only")
+	if err != nil {
+		return fmt.Errorf("git pull origin %s: %w", branch, err)
+	}
+	return nil
 }
 
 // BranchExists sprawdza czy gałąź istnieje lokalnie lub zdalnie.

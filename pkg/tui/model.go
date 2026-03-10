@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -616,20 +617,20 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 
 func (m *RootModel) cmdInitDeploy(envName string) tea.Cmd {
 	return func() tea.Msg {
-		// Sprawdź czystość repo tylko jeśli Jest repozytorium Git i repo jest brudne.
-		// Projekty bez Git (plain HTML, itp.) mają IsClean=true lub gitStatus==nil.
-		if m.gitStatus != nil &&
-			m.gitStatus.Branch != "(brak git)" &&
-			!m.gitStatus.IsClean {
+		// Sprawdź czystość repo tylko dla projektów Git z niezatwierdzonymi zmianami.
+		// rnr wykona git checkout na odpowiednią gałąź — niezatwierdzone zmiany
+		// mogą być nadpisane lub powodować konflikty. Blokujemy przed deploy.
+		if m.gitStatus != nil && m.gitStatus.IsGitRepo && !m.gitStatus.IsClean {
 			return ErrorMsg{
 				Title: "Niezatwierdzone zmiany",
 				Message: fmt.Sprintf(
 					"Znaleziono %d niezatwierdzonych plików.\n\n"+
+						"rnr wykona git checkout na gałąź środowiska — niezatwierdzone\n"+
+						"zmiany mogą ulec utracie lub powodować konflikty.\n\n"+
 						"Zatwierdź zmiany przed wdrożeniem:\n"+
 						"  git add . && git commit -m 'opis'\n\n"+
 						"lub odłóż na bok:\n"+
-						"  git stash\n\n"+
-						"lub użyj rnr deploy --force (pomiń sprawdzenie)",
+						"  git stash",
 					len(m.gitStatus.DirtyFiles),
 				),
 				Err: fmt.Errorf("niezatwierdzone zmiany"),
@@ -696,10 +697,15 @@ func (m *RootModel) cmdOpenLogs() tea.Cmd {
 
 // cmdStartDeploy przygotowuje model deployu i uruchamia potok.
 func (m *RootModel) cmdStartDeploy(envName string) tea.Cmd {
-	stages := m.cfg.GetStagesForEnv(envName)
+	userStages := m.cfg.GetStagesForEnv(envName)
 	m.deployID = uuid.New().String()
 	m.deployEnv = envName
-	m.deploy = NewDeployModel(m.width, m.height, envName, stages, false)
+
+	// Przygotuj pełną listę etapów z pre-etapami Git (checkout + pull)
+	// dla projektów z repozytorium Git.
+	allStages := m.buildAllStages(envName, userStages)
+
+	m.deploy = NewDeployModel(m.width, m.height, envName, allStages, false)
 	m.screen = ScreenDeploy
 
 	// Utwórz kanał komunikacji pipeline → TUI
@@ -708,9 +714,36 @@ func (m *RootModel) cmdStartDeploy(envName string) tea.Cmd {
 
 	return tea.Batch(
 		m.deploy.Init(),
-		m.cmdRunPipeline(envName, stages, ch),
+		m.cmdRunPipeline(envName, allStages, ch),
 		m.cmdWaitPipeline(),
 	)
+}
+
+// buildAllStages wstrzykuje pre-etapy Git (checkout, pull) przed etapami
+// zdefiniowanymi przez użytkownika — tylko jeśli środowisko ma skonfigurowaną gałąź.
+func (m *RootModel) buildAllStages(envName string, userStages []config.Stage) []config.Stage {
+	env, ok := m.cfg.Environments[envName]
+	if !ok || env.Branch == "" {
+		return userStages
+	}
+	// Pre-etapy Git są pomijane jeśli to nie jest repozytorium Git
+	if m.gitStatus != nil && !m.gitStatus.IsGitRepo {
+		return userStages
+	}
+
+	gitStages := []config.Stage{
+		{
+			Name: fmt.Sprintf("git checkout %s", env.Branch),
+			Type: config.StageTypeGit,
+			Run:  "checkout:" + env.Branch,
+		},
+		{
+			Name: fmt.Sprintf("git pull origin %s", env.Branch),
+			Type: config.StageTypeGit,
+			Run:  "pull:" + env.Branch,
+		},
+	}
+	return append(gitStages, userStages...)
 }
 
 // cmdWaitPipeline czeka na kolejną wiadomość z kanału pipeline.
@@ -799,38 +832,67 @@ func (m *RootModel) cmdRunPipeline(envName string, stages []config.Stage, ch cha
 				}
 			}(i)
 
-			var stageErr error
+		var stageErr error
 
-			switch stage.Type {
-			case config.StageTypeDeploy:
-				depProv, err := providers.NewDeployProvider(envCfg, masker, log)
-				if err != nil {
-					stageErr = err
-				} else {
-					stageErr = depProv.Deploy(ctx, envCfg, outputCh)
-				}
-			case config.StageTypeDatabase:
-				dbProv, err := providers.NewDatabaseProvider(envCfg, masker, log)
-				if err != nil {
-					stageErr = err
-				} else {
-					stageErr = dbProv.Migrate(ctx, envCfg, outputCh)
-				}
-			case config.StageTypeHealth:
-				if envCfg.URL != "" {
-					runner := providers.NewRunner(m.projectRoot, masker, log)
-					res := runner.RunShell(ctx,
-						fmt.Sprintf(`curl -sf --max-time 30 "%s" > /dev/null`, envCfg.URL),
-						envCfg.Env, outputCh)
-					stageErr = res.Error
-				}
-			default:
-				if stage.Run != "" {
-					runner := providers.NewRunner(m.projectRoot, masker, log)
-					res := runner.RunShell(ctx, stage.Run, envCfg.Env, outputCh)
-					stageErr = res.Error
+		switch stage.Type {
+		case config.StageTypeGit:
+			// Pre-etap Git — operacje na repozytorium przed wdrożeniem.
+			// stage.Run ma format "checkout:<branch>" lub "pull:<branch>".
+			parts := strings.SplitN(stage.Run, ":", 2)
+			if len(parts) == 2 {
+				op, branch := parts[0], parts[1]
+				switch op {
+				case "checkout":
+					outputCh <- fmt.Sprintf("→ git checkout %s", branch)
+					if err := gitops.CheckoutBranch(m.projectRoot, branch); err != nil {
+						stageErr = err
+					} else {
+						outputCh <- fmt.Sprintf("✓ Przełączono na gałąź: %s", branch)
+						// Odśwież status Git po checkout
+						if status, err2 := gitops.AuditRepo(m.projectRoot); err2 == nil {
+							m.gitStatus = status
+						}
+					}
+				case "pull":
+					outputCh <- fmt.Sprintf("→ git pull origin %s", branch)
+					if err := gitops.PullBranch(m.projectRoot, branch); err != nil {
+						// pull jest niekreytyczny — logujemy ostrzeżenie i kontynuujemy
+						outputCh <- fmt.Sprintf("⚠ git pull nieudany (kontynuuję): %v", err)
+						// Nie ustawiamy stageErr — pull failure nie blokuje deployu
+					} else {
+						outputCh <- fmt.Sprintf("✓ Pobrano aktualizacje z origin/%s", branch)
+					}
 				}
 			}
+		case config.StageTypeDeploy:
+			depProv, err := providers.NewDeployProvider(envCfg, masker, log)
+			if err != nil {
+				stageErr = err
+			} else {
+				stageErr = depProv.Deploy(ctx, envCfg, outputCh)
+			}
+		case config.StageTypeDatabase:
+			dbProv, err := providers.NewDatabaseProvider(envCfg, masker, log)
+			if err != nil {
+				stageErr = err
+			} else {
+				stageErr = dbProv.Migrate(ctx, envCfg, outputCh)
+			}
+		case config.StageTypeHealth:
+			if envCfg.URL != "" {
+				runner := providers.NewRunner(m.projectRoot, masker, log)
+				res := runner.RunShell(ctx,
+					fmt.Sprintf(`curl -sf --max-time 30 "%s" > /dev/null`, envCfg.URL),
+					envCfg.Env, outputCh)
+				stageErr = res.Error
+			}
+		default:
+			if stage.Run != "" {
+				runner := providers.NewRunner(m.projectRoot, masker, log)
+				res := runner.RunShell(ctx, stage.Run, envCfg.Env, outputCh)
+				stageErr = res.Error
+			}
+		}
 
 			close(outputCh)
 			durMS := time.Since(startTime).Milliseconds()

@@ -32,6 +32,10 @@ const StageTypeDeploy = "deploy"
 // StageTypeHealth oznacza automatyczne sprawdzenie zdrowia aplikacji po deploy.
 const StageTypeHealth = "health"
 
+// StageTypeGit oznacza wewnętrzny etap operacji Git (checkout, pull).
+// Generowany automatycznie przez rnr — nie pojawia się w rnr.yaml.
+const StageTypeGit = "git"
+
 // ─── Stałe dostawców wdrożenia ─────────────────────────────────────────────
 
 const (
