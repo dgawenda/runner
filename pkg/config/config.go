@@ -570,38 +570,43 @@ func DefaultConfYAMLFromWizard(
 	}
 
 	// ── Blok wdrożenia dla PRODUKCJI ──────────────────────────────────────
+	// WAŻNE: wcięcia muszą mieć 6 spacji (linie kontynuacji w bloku `deploy:`
+	// który jest na głębokości 4 spacji; jego dzieci są na 6 spacjach).
+	// Pierwsza linia bloku dostaje 6 spacji z szablonu (%s), pozostałe muszą
+	// same posiadać 6 spacji jako wcięcie.
 	prodDeployBlock := ""
 	stagingDeployBlock := ""
 	if deployProv == ProviderNetlify {
 		prodDeployBlock = fmt.Sprintf(
-			`netlify_auth_token: "%s"
-    netlify_site_id: "%s"
-    netlify_create_new: %s`,
+			"netlify_auth_token: %q\n"+
+				"      netlify_site_id: %q\n"+
+				"      netlify_create_new: %s",
 			netlifyToken, prodSiteID, prodCreateNewStr)
-		// Staging: ten sam token, osobny site ID
+		// Development: ten sam token, osobny site ID
 		stagingDeployBlock = fmt.Sprintf(
-			`netlify_auth_token: "%s"
-    netlify_site_id: "%s"
-    netlify_create_new: %s`,
+			"netlify_auth_token: %q\n"+
+				"      netlify_site_id: %q\n"+
+				"      netlify_create_new: %s",
 			netlifyToken, stagingSiteID, stagingCreateNewStr)
 	} else if deployProv == ProviderVercel {
-		prodDeployBlock = fmt.Sprintf(`vercel_token: "%s"`, netlifyToken)
-		stagingDeployBlock = fmt.Sprintf(`vercel_token: "%s"`, netlifyToken)
+		prodDeployBlock = fmt.Sprintf("vercel_token: %q", netlifyToken)
+		stagingDeployBlock = fmt.Sprintf("vercel_token: %q", netlifyToken)
 	}
 
 	// ── Blok bazy danych dla PRODUKCJI ────────────────────────────────────
+	// Tak samo 6-spacjowe wcięcia dla linii kontynuacji.
 	prodDBBlock := ""
 	stagingDBBlock := ""
 	if dbProv == DBProviderSupabase {
 		prodDBBlock = fmt.Sprintf(
-			`supabase_project_ref: "%s"
-    supabase_db_url: "%s"
-    supabase_anon_key: "%s"`,
+			"supabase_project_ref: %q\n"+
+				"      supabase_db_url: %q\n"+
+				"      supabase_anon_key: %q",
 			supabaseRef, supabaseURL, supabaseKey)
 		// Development: osobny projekt Supabase (do uzupełnienia)
-		stagingDBBlock = `supabase_project_ref: ""   # ← osobny projekt Supabase dla development
-    supabase_db_url: ""
-    supabase_anon_key: ""`
+		stagingDBBlock = "supabase_project_ref: \"\"   # ← osobny projekt Supabase dla development\n" +
+			"      supabase_db_url: \"\"\n" +
+			"      supabase_anon_key: \"\""
 	}
 
 	return fmt.Sprintf(`# ╔══════════════════════════════════════════════════════════════════════════╗

@@ -722,6 +722,35 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 			return ErrorMsg{Title: "Błąd katalogu", Message: err.Error(), Err: err}
 		}
 
+		// Otwórz log inicjalizacji — użytkownik może go sprawdzić przez L → lista logów
+		initLog, _ := logger.NewForDeployment(
+			filepath.Join(root, config.LogsDir),
+			"init", logger.NopMasker(),
+		)
+		logInit := func(format string, args ...any) {
+			if initLog != nil {
+				initLog.Info(format, args...)
+			}
+		}
+		logInitOK := func(format string, args ...any) {
+			if initLog != nil {
+				initLog.Success(format, args...)
+			}
+		}
+		logInitErr := func(format string, args ...any) {
+			if initLog != nil {
+				initLog.Error(format, args...)
+			}
+		}
+		if initLog != nil {
+			defer initLog.Close()
+		}
+
+		logInit("══════════════════════════════════════════════════════")
+		logInit("rnr init: projekt=%s deploy=%s db=%s",
+			w.ProjectName, w.DeployProv, w.DBProv)
+		logInit("══════════════════════════════════════════════════════")
+
 		// ── Krok 1: rnr.yaml (generuj tylko jeśli nie istnieje) ──────────────
 		pipelinePath := filepath.Join(root, config.PipelineFile)
 		if _, err := os.Stat(pipelinePath); os.IsNotExist(err) {
@@ -734,37 +763,59 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 				projectType, w.DeployProv, w.DBProv,
 			)
 			if err := os.WriteFile(pipelinePath, []byte(content), 0o644); err != nil {
+				logInitErr("Błąd zapisu rnr.yaml: %v", err)
 				return ErrorMsg{Title: "Błąd zapisu rnr.yaml", Message: err.Error(), Err: err}
 			}
+			logInitOK("Zapisano rnr.yaml")
+		} else {
+			logInit("rnr.yaml już istnieje — pominięto")
 		}
 
 		// ── Krok 2: Automatyczne tworzenie projektów Netlify przez REST API ───
 		// Jeśli netlify_create_new: true i token jest podany, zakładamy TERAZ projekty
-		// dla produkcji i stagingu — użytkownik nie musi wychodzić z TUI do Netlify UI.
+		// dla produkcji i development — użytkownik nie musi wychodzić z TUI do Netlify UI.
 		prodSiteID := w.NetlifySiteID // może być pusty (jeśli user wybrał "utwórz nowy")
 		stagingSiteID := ""
 		prodCreateNew := w.NetlifyCreateNew && prodSiteID == ""
 		stagingCreateNew := w.NetlifyCreateNew
 
 		if w.DeployProv == "netlify" && w.NetlifyCreateNew && w.NetlifyToken != "" {
+			logInit("Netlify: tworzenie projektów przez REST API...")
+
 			// Projekt produkcyjny (nazwa projektu bez sufiksu)
 			if prodSiteID == "" {
-				id, _, createErr := providers.NetlifyCreateSiteWithLog(w.NetlifyToken, w.ProjectName)
+				logInit("Netlify: tworzenie projektu produkcji '%s'...", w.ProjectName)
+				id, logs, createErr := providers.NetlifyCreateSiteWithLog(w.NetlifyToken, w.ProjectName)
+				for _, l := range logs {
+					logInit("  Netlify API: %s", l)
+				}
 				if createErr == nil && id != "" {
 					prodSiteID = id
 					prodCreateNew = false // Sukces — nie potrzeba tworzyć przy deployu
+					logInitOK("Netlify production: Site ID = %s", id)
+				} else if createErr != nil {
+					logInitErr("Netlify production: błąd tworzenia: %v", createErr)
+					logInit("  → Site zostanie założony automatycznie przy pierwszym deploy")
 				}
-				// Błąd niekrytyczny: conf zostanie zapisany z netlify_create_new: true
-				// i projekt zostanie założony przy pierwszym deploy
 			}
 
 			// Projekt development (sufiks -dev dla rozróżnienia od produkcji)
 			stagingName := w.ProjectName + "-dev" // krótka nazwa, czytelna w Netlify
-			id, _, createErr := providers.NetlifyCreateSiteWithLog(w.NetlifyToken, stagingName)
+			logInit("Netlify: tworzenie projektu development '%s'...", stagingName)
+			id, logs, createErr := providers.NetlifyCreateSiteWithLog(w.NetlifyToken, stagingName)
+			for _, l := range logs {
+				logInit("  Netlify API: %s", l)
+			}
 			if createErr == nil && id != "" {
 				stagingSiteID = id
 				stagingCreateNew = false // Sukces — nie potrzeba tworzyć przy deployu
+				logInitOK("Netlify development: Site ID = %s", id)
+			} else if createErr != nil {
+				logInitErr("Netlify development: błąd tworzenia: %v", createErr)
+				logInit("  → Site zostanie założony automatycznie przy pierwszym deploy")
 			}
+		} else if w.DeployProv == "netlify" {
+			logInit("Netlify: pomijam auto-tworzenie (netlify_create_new=false lub brak tokenu)")
 		}
 
 		// ── Krok 3: rnr.conf.yaml — sekrety z finalnymi Site ID ──────────────
@@ -777,7 +828,16 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 			w.DBProv, w.SupabaseRef, w.SupabaseURL, w.SupabaseKey,
 		)
 		if err := os.WriteFile(confPath, []byte(confContent), 0o600); err != nil {
+			logInitErr("Błąd zapisu rnr.conf.yaml: %v", err)
 			return ErrorMsg{Title: "Błąd zapisu rnr.conf.yaml", Message: err.Error(), Err: err}
+		}
+		if prodSiteID != "" {
+			logInitOK("Zapisano rnr.conf.yaml (production site_id=%s)", prodSiteID)
+		} else {
+			logInitOK("Zapisano rnr.conf.yaml (production site_id zostanie ustawiony przy deployu)")
+		}
+		if stagingSiteID != "" {
+			logInitOK("  development site_id=%s", stagingSiteID)
 		}
 
 		_ = config.EnsureGitignore(root)
@@ -786,15 +846,31 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 		// Jeśli użytkownik wybrał HTTPS lub SSH w wizardzie, ustawiamy remote.
 		// Operacja niekrytyczna — błąd nie blokuje inicjalizacji.
 		if w.GitHubRemoteURL != "" {
-			_ = gitops.SetRemote(root, w.GitHubRemoteURL)
+			if err := gitops.SetRemote(root, w.GitHubRemoteURL); err != nil {
+				logInitErr("GitHub remote: nie udało się ustawić: %v", err)
+			} else {
+				logInitOK("GitHub remote: ustawiono origin → %s", w.GitHubRemoteURL)
+			}
 		}
 
 		// ── Krok 5: Automatyczne tworzenie gałęzi środowiskowych ─────────────
-		// production → branch "master", dev → branch "dev"
+		// production → branch "master", development → branch "develop"
 		// Tworzy gałęzie BEZ przełączania (git branch <name>).
 		// Bezpieczne: brak commitów lub brak repo → pominięte cicho.
-		gitops.EnsureBranch(root, "master")  // gałąź produkcji  → środowisko production
-		gitops.EnsureBranch(root, "develop") // gałąź deweloperska → środowisko development
+		if _, err := gitops.EnsureBranch(root, "master"); err == nil {
+			logInitOK("Gałąź 'master' → środowisko production")
+		}
+		if _, err := gitops.EnsureBranch(root, "develop"); err == nil {
+			logInitOK("Gałąź 'develop' → środowisko development")
+		}
+
+		logInitOK("══════════════════════════════════════════════════════")
+		logInitOK("Inicjalizacja zakończona — sprawdź log: %s", func() string {
+			if initLog != nil {
+				return initLog.FilePath()
+			}
+			return ".rnr/logs/init_*.log"
+		}())
 
 		return NavigateMsg{Screen: ScreenDashboard}
 	}
