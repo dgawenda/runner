@@ -27,7 +27,8 @@ const (
 	wizardStepWelcome WizardStep = iota
 	wizardStepProjectName
 	wizardStepRepo
-	wizardStepProjectType    // HTML/npm/custom — wpływa na generowane stage'y
+	wizardStepGitHubConnect   // Czy połączyć z GitHub remote? (HTTPS / SSH / Nie)
+	wizardStepProjectType     // HTML/npm/custom — wpływa na generowane stage'y
 	wizardStepDeployProvider
 	wizardStepNetlifyToken
 	wizardStepNetlifySiteMode // Czy masz już site? Wybierz: istniejący / utwórz nowy
@@ -71,6 +72,13 @@ var netlifySiteModes = []DeployProviderChoice{
 	{"Utwórz nowy projekt", "create", "✨", "rnr automatycznie założy nowy projekt Netlify"},
 }
 
+// gitHubConnectModes — jak połączyć repo z GitHub remote.
+var gitHubConnectModes = []DeployProviderChoice{
+	{"HTTPS (github.com)", "https", "🔒", "Standardowe połączenie HTTPS (wymaga tokenu/hasła)"},
+	{"SSH (git@github.com)", "ssh", "🔑", "Połączenie SSH (wymaga klucza SSH skonfigurowanego w GitHub)"},
+	{"Pomiń — skonfiguruj ręcznie", "skip", "⏩", "Remote można dodać później: git remote add origin <url>"},
+}
+
 var dbProviders = []DeployProviderChoice{
 	{"Supabase", "supabase", "⚡", "BaaS z PostgreSQL (zalecany)"},
 	{"Prisma ORM", "prisma", "🔷", "TypeScript ORM"},
@@ -93,10 +101,11 @@ type WizardModel struct {
 	activeInput   int
 
 	// Wybory dostawców
-	projectTypeChoice     int // indeks w projectTypeChoices
-	deployChoice          int
-	dbChoice              int
-	netlifySiteModeChoice int // 0 = istniejący, 1 = utwórz nowy
+	projectTypeChoice      int // indeks w projectTypeChoices
+	deployChoice           int
+	dbChoice               int
+	netlifySiteModeChoice  int // 0 = istniejący, 1 = utwórz nowy
+	gitHubConnectChoice    int // 0 = HTTPS, 1 = SSH, 2 = pomiń
 
 	// Zebrane dane
 	projectName      string
@@ -105,7 +114,8 @@ type WizardModel struct {
 	deployProv       string
 	netlifyToken     string
 	netlifySiteID    string
-	netlifyCreateNew bool // true = rnr sam tworzy projekt na Netlify
+	netlifyCreateNew bool   // true = rnr sam tworzy projekt na Netlify
+	gitHubRemoteURL  string // URL remote GitHub (puste = pomiń)
 	dbProv           string
 	supabaseRef      string
 	supabaseURL      string
@@ -228,6 +238,8 @@ func (m WizardModel) View() string {
 	case wizardStepRepo:
 		return m.viewInput(1, "Repozytorium GitHub", "Podaj repozytorium w formacie owner/repo",
 			"Np. 'mojafirma/moj-projekt'. Używane do releasów.\nMożesz pominąć (zostaw puste) jeśli nie korzystasz z GitHub.")
+	case wizardStepGitHubConnect:
+		return m.viewGitHubConnect()
 	case wizardStepProjectType:
 		return m.viewProviderChoice("Typ projektu", projectTypeChoices, m.projectTypeChoice)
 	case wizardStepDeployProvider:
@@ -395,6 +407,83 @@ func (m WizardModel) viewProviderChoice(title string, choices []DeployProviderCh
 	return StylePanelAccent.Width(maxW).Render(content)
 }
 
+// viewGitHubConnect renderuje krok wyboru połączenia z GitHub.
+// Pokazuje opcje HTTPS / SSH / Pomiń wraz z podglądem URL który zostanie ustawiony.
+func (m WizardModel) viewGitHubConnect() string {
+	maxW := min(m.width-4, 72)
+
+	// Oblicz podgląd URL na podstawie repo + wyboru trybu
+	repoSlug := m.repo // "owner/repo"
+	var previewURL string
+	switch m.gitHubConnectChoice {
+	case 0: // HTTPS
+		if repoSlug != "" {
+			previewURL = "https://github.com/" + repoSlug + ".git"
+		} else {
+			previewURL = "https://github.com/<owner>/<repo>.git"
+		}
+	case 1: // SSH
+		if repoSlug != "" {
+			// "owner/repo" → "git@github.com:owner/repo.git"
+			previewURL = "git@github.com:" + repoSlug + ".git"
+		} else {
+			previewURL = "git@github.com:<owner>/<repo>.git"
+		}
+	case 2: // Pomiń
+		previewURL = "(brak remote — skonfiguruj ręcznie po inicializacji)"
+	}
+
+	stepInfo := StyleMuted.Render(fmt.Sprintf("  Krok %d z %d", int(m.step), wizardStepReview))
+	titleStr := StyleTitle.Render("🔗 Połączenie z GitHub Remote")
+	instruction := lipgloss.NewStyle().Foreground(ColorSubtext).
+		Render("Wybierz sposób połączenia z repozytorium GitHub:")
+
+	var items strings.Builder
+	for i, choice := range gitHubConnectModes {
+		var row string
+		if i == m.gitHubConnectChoice {
+			row = lipgloss.NewStyle().
+				Foreground(ColorPrimary).
+				Bold(true).
+				Render(fmt.Sprintf("  ▶ %s %-20s — %s", choice.Emoji, choice.Label, choice.Desc))
+		} else {
+			row = lipgloss.NewStyle().
+				Foreground(ColorSubtext).
+				Render(fmt.Sprintf("    %s %-20s — %s", choice.Emoji, choice.Label, choice.Desc))
+		}
+		items.WriteString(row + "\n")
+	}
+
+	// Podgląd URL
+	previewStyle := lipgloss.NewStyle().Foreground(ColorInfo).Italic(true)
+	previewLine := ""
+	if m.gitHubConnectChoice < 2 {
+		previewLine = "\n  " + StyleLabel.Render("Ustawi:") + "  " + previewStyle.Render(previewURL)
+	} else {
+		previewLine = "\n  " + StyleMuted.Render(previewURL)
+	}
+
+	// Ostrzeżenie gdy brak repo
+	var warnStr string
+	if repoSlug == "" && m.gitHubConnectChoice < 2 {
+		warnStr = "\n  " + StyleWarning.Render("⚠  Nie podałeś repo (owner/repo) — cofnij i uzupełnij,\n     lub wybierz 'Pomiń' i skonfiguruj remote ręcznie.")
+	}
+
+	navHint := StyleMuted.Render("\n  ↑↓ = nawigacja • ENTER = wybierz • ESC = cofnij")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		stepInfo, "",
+		titleStr, "",
+		instruction, "",
+		items.String(),
+		previewLine,
+		warnStr,
+		navHint,
+	)
+
+	return StylePanelAccent.Width(maxW).Render(content)
+}
+
 func (m WizardModel) viewReview() string {
 	maxW := min(m.width-4, 72)
 
@@ -449,6 +538,11 @@ func (m WizardModel) viewReview() string {
 	}
 	if m.projectType != "html" {
 		rows = append(rows, row("Dostawca bazy", dbProv))
+	}
+	if m.gitHubRemoteURL != "" {
+		rows = append(rows, row("GitHub remote", m.gitHubRemoteURL))
+	} else if m.repo != "" {
+		rows = append(rows, row("GitHub remote", "(pominięty)"))
 	}
 
 	summary := lipgloss.JoinVertical(lipgloss.Left, rows...)
@@ -518,6 +612,10 @@ func (m WizardModel) handleKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
 			if m.netlifySiteModeChoice > 0 {
 				m.netlifySiteModeChoice--
 			}
+		} else if m.step == wizardStepGitHubConnect {
+			if m.gitHubConnectChoice > 0 {
+				m.gitHubConnectChoice--
+			}
 		} else if m.step == wizardStepDBProvider {
 			if m.dbChoice > 0 {
 				m.dbChoice--
@@ -537,6 +635,10 @@ func (m WizardModel) handleKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
 		} else if m.step == wizardStepNetlifySiteMode {
 			if m.netlifySiteModeChoice < len(netlifySiteModes)-1 {
 				m.netlifySiteModeChoice++
+			}
+		} else if m.step == wizardStepGitHubConnect {
+			if m.gitHubConnectChoice < len(gitHubConnectModes)-1 {
+				m.gitHubConnectChoice++
 			}
 		} else if m.step == wizardStepDBProvider {
 			if m.dbChoice < len(dbProviders)-1 {
@@ -574,6 +676,28 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 
 	case wizardStepRepo:
 		m.repo = strings.TrimSpace(m.inputs[1].Value())
+		// Pokaż krok GitHub Connect tylko jeśli jest repo
+		if m.repo != "" {
+			m.step = wizardStepGitHubConnect
+		} else {
+			m.step = wizardStepProjectType
+		}
+
+	case wizardStepGitHubConnect:
+		// Oblicz URL na podstawie repo i wyboru trybu
+		repoSlug := m.repo
+		switch m.gitHubConnectChoice {
+		case 0: // HTTPS
+			if repoSlug != "" {
+				m.gitHubRemoteURL = "https://github.com/" + repoSlug + ".git"
+			}
+		case 1: // SSH
+			if repoSlug != "" {
+				m.gitHubRemoteURL = "git@github.com:" + repoSlug + ".git"
+			}
+		case 2: // Pomiń
+			m.gitHubRemoteURL = ""
+		}
 		m.step = wizardStepProjectType
 
 	case wizardStepProjectType:
@@ -666,6 +790,7 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 				SupabaseRef:      m.supabaseRef,
 				SupabaseURL:      m.supabaseURL,
 				SupabaseKey:      m.supabaseKey,
+				GitHubRemoteURL:  m.gitHubRemoteURL,
 			}
 		}
 

@@ -343,6 +343,63 @@ func StageAll(workdir string) error {
 	return err
 }
 
+// StageFiles dodaje wybrane pliki do staging area.
+// Jeśli lista files jest pusta, funkcja działa jak StageAll (git add -A).
+// Odpowiednik: git add -- plik1 plik2 ...
+func StageFiles(workdir string, files []string) error {
+	if len(files) == 0 {
+		return StageAll(workdir)
+	}
+	args := append([]string{"add", "--"}, files...)
+	_, err := runGit(workdir, args...)
+	return err
+}
+
+// UnstageAll usuwa wszystkie pliki z staging area (nie usuwa zmian z dysku).
+// Odpowiednik: git reset HEAD
+func UnstageAll(workdir string) error {
+	_, err := runGit(workdir, "reset", "HEAD")
+	return err
+}
+
+// SetRemote ustawia lub aktualizuje remote "origin" na podany URL.
+// Jeśli remote "origin" nie istnieje — dodaje go (git remote add).
+// Jeśli istnieje — nadpisuje URL (git remote set-url).
+func SetRemote(workdir, url string) error {
+	if url == "" {
+		return nil
+	}
+	// Sprawdź czy remote "origin" już istnieje
+	out, _ := runGit(workdir, "remote", "get-url", "origin")
+	if strings.TrimSpace(out) != "" {
+		// Istnieje — zaktualizuj URL
+		_, err := runGit(workdir, "remote", "set-url", "origin", url)
+		return err
+	}
+	// Nie istnieje — dodaj
+	_, err := runGit(workdir, "remote", "add", "origin", url)
+	return err
+}
+
+// PushCurrentBranch wypycha bieżącą gałąź do origin.
+// Przy pierwszym pushu ustawia upstream (--set-upstream).
+func PushCurrentBranch(workdir string) (string, error) {
+	branch, err := GetCurrentBranch(workdir)
+	if err != nil {
+		return "", fmt.Errorf("nie można odczytać bieżącej gałęzi: %w", err)
+	}
+	// Sprawdź czy gałąź ma już upstream (tracking)
+	_, upErr := runGit(workdir, "rev-parse", "--abbrev-ref", branch+"@{upstream}")
+	if upErr != nil {
+		// Brak upstream — push z --set-upstream
+		out, err := runGit(workdir, "push", "--set-upstream", "origin", branch)
+		return out, err
+	}
+	// Ma upstream — zwykły push
+	out, err := runGit(workdir, "push", "origin", branch)
+	return out, err
+}
+
 // CommitWithMessage tworzy commit z podaną wiadomością.
 // Zwraca hash nowego commita.
 func CommitWithMessage(workdir, message string) (string, error) {

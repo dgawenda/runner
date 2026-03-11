@@ -351,8 +351,8 @@ environments:
       # db_migrate_cmd: "npm run db:migrate"
       # db_rollback_cmd: "npm run db:rollback"
 
-  # ── STAGING ────────────────────────────────────────────────────────────────
-  staging:
+  # ── DEVELOPMENT ─────────────────────────────────────────────────────────────
+  development:
     deploy:
       netlify_auth_token: ""       # Może być ten sam co production
       netlify_site_id: ""          # INNY Site ID niż production!
@@ -401,7 +401,7 @@ func DefaultPipelineYAMLFromWizard(
   # ── Migracje bazy danych ──────────────────────────────────────────────────
   - name: migrate
     type: database
-    only: [production, staging]
+    only: [production, development]
 `
 	}
 
@@ -523,7 +523,7 @@ environments:
     database:
       %s
 
-  staging:
+  development:
     branch: "develop"
     url: ""
     protected: false
@@ -598,8 +598,8 @@ func DefaultConfYAMLFromWizard(
     supabase_db_url: "%s"
     supabase_anon_key: "%s"`,
 			supabaseRef, supabaseURL, supabaseKey)
-		// Staging: osobny projekt Supabase (do uzupełnienia)
-		stagingDBBlock = `supabase_project_ref: ""   # ← osobny projekt Supabase dla staging
+		// Development: osobny projekt Supabase (do uzupełnienia)
+		stagingDBBlock = `supabase_project_ref: ""   # ← osobny projekt Supabase dla development
     supabase_db_url: ""
     supabase_anon_key: ""`
 	}
@@ -631,9 +631,9 @@ environments:
     database:
       %s
 
-  # ── STAGING ───────────────────────────────────────────────────────────────
-  # Staging używa tych samych providerów co produkcja — uzupełnij osobne credentials.
-  staging:
+  # ── DEVELOPMENT ───────────────────────────────────────────────────────────
+  # Development używa tych samych providerów co produkcja — uzupełnij osobne credentials.
+  development:
     deploy:
       %s
 
@@ -669,12 +669,10 @@ func AddEnvironment(projectRoot, envName, fromEnv string) error {
 	case "local":
 		branch = "master"
 		nodeEnv = "development"
-	case "dev", "development":
+	case "dev", "development", "staging":
+		// "development" to standardowe środowisko deweloperskie — branch "develop"
 		branch = "develop"
 		nodeEnv = "development"
-	case "staging":
-		branch = "develop"
-		nodeEnv = "staging"
 	case "production":
 		branch = "master"
 		protected = true

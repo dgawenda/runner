@@ -258,8 +258,8 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.cmdGitCheckout(msg.Branch))
 
 	case GitCommitRequestMsg:
-		// Żądanie commit z GitPanel → stage all + commit
-		cmds = append(cmds, m.cmdGitStageAndCommit(msg.Message))
+		// Żądanie commit z GitPanel → stage wybranych plików + commit
+		cmds = append(cmds, m.cmdGitStageAndCommit(msg.Message, msg.Files))
 
 	case GitCheckoutDoneMsg:
 		// Wynik checkout → przekaż do gitPanel + odśwież git status + gałęzie
@@ -267,6 +267,16 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
 		cmds = append(cmds, gpCmd)
 		cmds = append(cmds, m.cmdAuditGitSilent(), m.cmdGitLoadBranches())
+
+	case GitPushRequestMsg:
+		// Żądanie push z GitPanel → wypchnij bieżącą gałąź
+		cmds = append(cmds, m.cmdGitPush())
+
+	case GitPushDoneMsg:
+		// Wynik push → przekaż do gitPanel
+		var gpCmd tea.Cmd
+		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, gpCmd)
 
 	case GitCommitDoneMsg:
 		// Wynik commit → przekaż do gitPanel + odśwież git status + historię
@@ -748,8 +758,8 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 				// i projekt zostanie założony przy pierwszym deploy
 			}
 
-			// Projekt stagingowy (sufiks -staging dla rozróżnienia)
-			stagingName := w.ProjectName + "-staging"
+			// Projekt development (sufiks -dev dla rozróżnienia od produkcji)
+			stagingName := w.ProjectName + "-dev" // krótka nazwa, czytelna w Netlify
 			id, _, createErr := providers.NetlifyCreateSiteWithLog(w.NetlifyToken, stagingName)
 			if createErr == nil && id != "" {
 				stagingSiteID = id
@@ -772,12 +782,19 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 
 		_ = config.EnsureGitignore(root)
 
-		// ── Krok 4: Automatyczne tworzenie gałęzi środowiskowych ─────────────
-		// production → branch "master", staging → branch "develop"
+		// ── Krok 4: GitHub remote (git remote add/set-url origin <url>) ───────
+		// Jeśli użytkownik wybrał HTTPS lub SSH w wizardzie, ustawiamy remote.
+		// Operacja niekrytyczna — błąd nie blokuje inicjalizacji.
+		if w.GitHubRemoteURL != "" {
+			_ = gitops.SetRemote(root, w.GitHubRemoteURL)
+		}
+
+		// ── Krok 5: Automatyczne tworzenie gałęzi środowiskowych ─────────────
+		// production → branch "master", dev → branch "dev"
 		// Tworzy gałęzie BEZ przełączania (git branch <name>).
 		// Bezpieczne: brak commitów lub brak repo → pominięte cicho.
-		gitops.EnsureBranch(root, "master")  // gałąź produkcji
-		gitops.EnsureBranch(root, "develop") // gałąź stagingu
+		gitops.EnsureBranch(root, "master")  // gałąź produkcji  → środowisko production
+		gitops.EnsureBranch(root, "develop") // gałąź deweloperska → środowisko development
 
 		return NavigateMsg{Screen: ScreenDashboard}
 	}
@@ -879,7 +896,8 @@ func (m *RootModel) cmdInitPromote() tea.Cmd {
 		var sourceEnv, targetEnv string
 
 		// 1. Preferuj dokładne, typowe nazwy (tylko jeśli mają DB)
-		for _, name := range []string{"staging", "stage", "develop", "dev"} {
+		// "development" jest priorytetem jako środowisko źródłowe (nowa konwencja)
+		for _, name := range []string{"development", "dev", "staging", "stage"} {
 			if hasDB(name) && sourceEnv == "" {
 				sourceEnv = name
 			}
@@ -1017,15 +1035,30 @@ func (m *RootModel) cmdGitCheckout(branch string) tea.Cmd {
 	}
 }
 
-// cmdGitStageAndCommit wykonuje git add -A && git commit -m "message".
-func (m *RootModel) cmdGitStageAndCommit(message string) tea.Cmd {
+// cmdGitStageAndCommit wykonuje git add (wybrane pliki lub -A) && git commit -m "message".
+// Jeśli files jest puste — stage all (git add -A).
+// Jeśli files zawiera ścieżki — stage tylko je (git add -- plik1 plik2...).
+func (m *RootModel) cmdGitStageAndCommit(message string, files []string) tea.Cmd {
 	root := m.projectRoot
 	return func() tea.Msg {
-		if err := gitops.StageAll(root); err != nil {
-			return GitCommitDoneMsg{Err: fmt.Errorf("git add -A: %w", err)}
+		if err := gitops.StageFiles(root, files); err != nil {
+			return GitCommitDoneMsg{Err: fmt.Errorf("git add: %w", err)}
 		}
 		hash, err := gitops.CommitWithMessage(root, message)
 		return GitCommitDoneMsg{Hash: hash, Err: err}
+	}
+}
+
+// cmdGitPush wypycha bieżącą gałąź do origin (z --set-upstream przy pierwszym razie).
+func (m *RootModel) cmdGitPush() tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		branch, err := gitops.GetCurrentBranch(root)
+		if err != nil {
+			return GitPushDoneMsg{Err: fmt.Errorf("nie można odczytać gałęzi: %w", err)}
+		}
+		_, pushErr := gitops.PushCurrentBranch(root)
+		return GitPushDoneMsg{Branch: branch, Err: pushErr}
 	}
 }
 

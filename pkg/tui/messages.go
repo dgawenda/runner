@@ -189,6 +189,10 @@ type WizardCompleteMsg struct {
 	SupabaseRef      string
 	SupabaseURL      string
 	SupabaseKey      string
+	// GitHubRemoteURL — URL zdalnego repozytorium (opcjonalne).
+	// Jeśli niepuste, rnr wywoła git remote add/set-url origin <url> podczas init.
+	// Format: "https://github.com/owner/repo.git" lub "git@github.com:owner/repo.git"
+	GitHubRemoteURL string
 }
 
 // OutputLineMsg — linia wyjścia do podglądu logów w deploy/rollback.
@@ -227,9 +231,11 @@ type GitCheckoutDoneMsg struct {
 	Err    error
 }
 
-// GitCommitRequestMsg — żądanie stage all + commit (z git panelu → root model).
+// GitCommitRequestMsg — żądanie stage wybranych plików + commit (z git panelu → root model).
+// Files: lista ścieżek do zaindeksowania; puste = git add -A (wszystkie zmiany).
 type GitCommitRequestMsg struct {
 	Message string
+	Files   []string // puste = stage all
 }
 
 // GitCommitDoneMsg — wynik operacji git commit.
@@ -254,4 +260,13 @@ type GitDiffLoadedMsg struct {
 	File  string
 	Lines []string
 	Err   error
+}
+
+// GitPushRequestMsg — żądanie git push bieżącej gałęzi (z git panelu → root model).
+type GitPushRequestMsg struct{}
+
+// GitPushDoneMsg — wynik operacji git push.
+type GitPushDoneMsg struct {
+	Branch string
+	Err    error
 }

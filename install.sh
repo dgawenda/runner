@@ -2,25 +2,23 @@
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  install.sh — Skrypt Instalacyjny rnr                                  ║
 # ║                                                                          ║
-# ║  Pobiera najnowszy plik binarny rnr z repozytorium GitHub (publicznego ║
-# ║  lub prywatnego) i instaluje go w katalogu .rnr/ bieżącego projektu.   ║
-# ║                                                                          ║
-# ║  Użycie (publiczne repo `dgawenda/runner`, gałąź master):               ║
-# ║    curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh \ ║
+# ║  TRYB ZDALNY (domyślny) — pobiera z GitHub Releases:                   ║
+# ║    curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh \║
 # ║      | bash -s -- --token ghp_TWOJ_TOKEN                               ║
 # ║                                                                          ║
-# ║  Lub lokalnie:                                                           ║
-# ║    ./install.sh --token ghp_TWOJ_TOKEN                                  ║
+# ║  TRYB LOKALNY — instaluje skompilowaną binarki z bieżącego katalogu:   ║
+# ║    ./install.sh --local                                                 ║
+# ║    ./install.sh --local --tag v1.0.0                                   ║
 # ║                                                                          ║
 # ║  Opcje:                                                                  ║
-# ║    --token TOKEN    GitHub Personal Access Token (zalecany / wymagany   ║
-# ║                     przy prywatnym repozytorium)                        ║
-# ║    --repo  REPO     Repozytorium GitHub (domyślnie: dgawenda/runner     ║
-# ║    --tag   TAG      Wersja do zainstalowania (domyślnie: najnowsza)     ║
+# ║    --token TOKEN    GitHub Personal Access Token                        ║
+# ║    --repo  REPO     Repozytorium GitHub (domyślnie: dgawenda/runner)    ║
+# ║    --tag   TAG      Wersja (domyślnie: najnowsza lub v1.0.0 lokalnie)  ║
 # ║    --dir   DIR      Katalog instalacji (domyślnie: .rnr/)               ║
+# ║    --local          Instaluj z lokalnej binarki (bez GitHub)            ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
-set -euo pipefail
+set -eo pipefail
 
 # ─── Kolory ────────────────────────────────────────────────────────────────
 
@@ -31,7 +29,7 @@ BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # ─── Domyślne wartości ─────────────────────────────────────────────────────
 
@@ -40,27 +38,17 @@ GITHUB_REPO="${RNR_REPO:-dgawenda/runner}"
 RELEASE_TAG="${RNR_VERSION:-latest}"
 INSTALL_DIR="${RNR_INSTALL_DIR:-.rnr}"
 BINARY_NAME="rnr"
+LOCAL_MODE=false
 
 # ─── Parser argumentów ────────────────────────────────────────────────────
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --token)
-      GITHUB_TOKEN="$2"
-      shift 2
-      ;;
-    --repo)
-      GITHUB_REPO="$2"
-      shift 2
-      ;;
-    --tag)
-      RELEASE_TAG="$2"
-      shift 2
-      ;;
-    --dir)
-      INSTALL_DIR="$2"
-      shift 2
-      ;;
+    --token)  GITHUB_TOKEN="$2"; shift 2 ;;
+    --repo)   GITHUB_REPO="$2";  shift 2 ;;
+    --tag)    RELEASE_TAG="$2";  shift 2 ;;
+    --dir)    INSTALL_DIR="$2";  shift 2 ;;
+    --local)  LOCAL_MODE=true;   shift   ;;
     -h|--help)
       grep "^# ║" "$0" | sed 's/^# ║  //' | sed 's/ *║$//'
       exit 0
@@ -85,7 +73,86 @@ die() {
   exit 1
 }
 
-# ─── Weryfikacja wymagań ───────────────────────────────────────────────────
+# ─── Logo ─────────────────────────────────────────────────────────────────
+
+print_logo() {
+  echo ""
+  echo -e "${PURPLE}${BOLD}"
+  echo "  ██████╗ ███╗   ██╗██████╗ "
+  echo "  ██╔══██╗████╗  ██║██╔══██╗"
+  echo "  ██████╔╝██╔██╗ ██║██████╔╝"
+  echo "  ██╔══██╗██║╚██╗██║██╔══██╗"
+  echo "  ██║  ██║██║ ╚████║██║  ██║"
+  echo "  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝"
+  echo -e "${NC}"
+  echo -e "  ${CYAN}runner — Instalator${NC}"
+  echo ""
+}
+
+# ─── Tryb lokalny ─────────────────────────────────────────────────────────
+# Instaluje binarki skompilowaną lokalnie poleceniem 'go build'.
+# Szuka pliku o nazwie pasującej do wzorca rnr_vX.Y.Z-PLATFORM lub po prostu 'rnr'.
+
+install_local() {
+  step "Tryb lokalny — szukam lokalnej binarki..."
+
+  # Wykryj platformę
+  OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  ARCH="$(uname -m)"
+  case "$ARCH" in
+    x86_64|amd64)  ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    i386|i686)     ARCH="386"   ;;
+  esac
+  case "$OS" in
+    linux*)  OS="linux"   ;;
+    darwin*) OS="darwin"  ;;
+  esac
+
+  # Ustal szukaną wersję
+  local tag="${RELEASE_TAG}"
+  if [[ "$tag" == "latest" ]]; then
+    # Znajdź najnowszą binarki pasującą do wzorca
+    tag=$(ls rnr_v*-"${OS}_${ARCH}" 2>/dev/null | sort -V | tail -1 | grep -oP 'v[\d.]+' || echo "v1.0.0")
+  fi
+
+  local candidates=(
+    "rnr_${tag}-${OS}_${ARCH}"
+    "rnr_${tag}-linux_amd64"
+    "rnr_${tag}"
+    "rnr"
+  )
+
+  local local_bin=""
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" && -x "$candidate" ]]; then
+      local_bin="$candidate"
+      break
+    elif [[ -f "$candidate" ]]; then
+      local_bin="$candidate"
+      break
+    fi
+  done
+
+  if [[ -z "$local_bin" ]]; then
+    die "Nie znaleziono lokalnej binarki.\n\n" \
+        "Skompiluj ją najpierw:\n" \
+        "  go build -o rnr_${tag}-${OS}_${ARCH} ./cmd/rnr/\n\n" \
+        "Lub uruchom bez --local, aby pobrać z GitHub Releases."
+  fi
+
+  info "Znaleziono: ${CYAN}${local_bin}${NC}"
+  mkdir -p "$INSTALL_DIR"
+
+  local dest="${INSTALL_DIR}/${BINARY_NAME}"
+  cp "$local_bin" "$dest"
+  chmod +x "$dest"
+
+  success "Zainstalowano lokalnie: ${CYAN}${dest}${NC}  (źródło: ${local_bin})"
+  INSTALLED_BINARY="$dest"
+}
+
+# ─── Weryfikacja wymagań (tryb zdalny) ────────────────────────────────────
 
 check_requirements() {
   step "Sprawdzanie wymagań..."
@@ -97,7 +164,7 @@ check_requirements() {
   done
 
   if [[ -z "$GITHUB_TOKEN" ]]; then
-    warn "Brak tokenu GitHub — instalacja z publicznego repozytorium będzie działać,\n  ale limity API GitHub mogą być niższe. Dla prywatnego repo użyj flagi --token."
+    warn "Brak tokenu GitHub (--token). Dla prywatnego repo wymagany.\n  Zmienne środowiskowe: RNR_GITHUB_TOKEN"
   fi
 
   success "Wymagania spełnione"
@@ -112,17 +179,17 @@ detect_platform() {
   ARCH="$(uname -m)"
 
   case "$OS" in
-    linux*)   OS="linux" ;;
-    darwin*)  OS="darwin" ;;
+    linux*)              OS="linux"   ;;
+    darwin*)             OS="darwin"  ;;
     mingw*|msys*|cygwin*) OS="windows" ;;
-    *)        die "Nieobsługiwany system operacyjny: $OS" ;;
+    *) die "Nieobsługiwany system operacyjny: $OS" ;;
   esac
 
   case "$ARCH" in
     x86_64|amd64)  ARCH="amd64" ;;
     aarch64|arm64) ARCH="arm64" ;;
-    i386|i686)     ARCH="386" ;;
-    *)             die "Nieobsługiwana architektura: $ARCH" ;;
+    i386|i686)     ARCH="386"   ;;
+    *) die "Nieobsługiwana architektura: $ARCH" ;;
   esac
 
   PLATFORM="${OS}_${ARCH}"
@@ -132,7 +199,7 @@ detect_platform() {
 # ─── Pobieranie informacji o Release ─────────────────────────────────────
 
 fetch_release_info() {
-  step "Pobieranie informacji o wersji..."
+  step "Pobieranie informacji o release..."
 
   local api_url
   if [[ "$RELEASE_TAG" == "latest" ]]; then
@@ -141,259 +208,261 @@ fetch_release_info() {
     api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}"
   fi
 
-  local response
+  local curl_opts=(-fsSL -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
   if [[ -n "$GITHUB_TOKEN" ]]; then
-    response=$(curl -fsSL \
-      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "$api_url") || die "Nie można pobrać informacji o release. Sprawdź token i nazwę repozytorium."
-  else
-    response=$(curl -fsSL \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "$api_url") || die "Nie można pobrać informacji o release. Sprawdź nazwę repozytorium."
+    curl_opts+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
   fi
 
-  RELEASE_TAG_RESOLVED=$(echo "$response" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+  local response
+  response=$(curl "${curl_opts[@]}" "$api_url" 2>&1) || \
+    die "Nie można pobrać informacji o release.\n\n" \
+        "Sprawdź:\n" \
+        "  • Token GitHub (--token ghp_...) dla prywatnych repo\n" \
+        "  • Czy release '$RELEASE_TAG' istnieje w '$GITHUB_REPO'\n" \
+        "  • Czy masz połączenie z internetem\n\n" \
+        "Tryb offline (lokalny build):\n  ./install.sh --local"
+
+  RELEASE_TAG_RESOLVED=$(echo "$response" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' | head -1)
+
   if [[ -z "$RELEASE_TAG_RESOLVED" ]]; then
-    die "Nie znaleziono release w repozytorium '${GITHUB_REPO}'.\nSprawdź czy token ma dostęp do repozytorium i czy istnieją jakieś release."
+    # Sprawdź czy to błąd API (np. 404, 403)
+    local message
+    message=$(echo "$response" | grep '"message"' | sed 's/.*"message": *"\([^"]*\)".*/\1/' | head -1)
+    if [[ -n "$message" ]]; then
+      die "GitHub API: $message\n\nDla prywatnego repo użyj: ./install.sh --token ghp_TWOJ_TOKEN\nLub tryb lokalny: ./install.sh --local"
+    fi
+    die "Nie znaleziono release '$RELEASE_TAG' w '$GITHUB_REPO'.\n\nUtwórz release na GitHub lub uruchom: ./install.sh --local"
   fi
 
   success "Wersja: ${CYAN}${RELEASE_TAG_RESOLVED}${NC}"
 
-  # Znajdź URL do pobrania binarki.
-  # 1. Priorytetowo szukamy dokładnie nazwanego pliku rnr_v1.0.0-linux_amd64 (Twój standardowy artefakt).
-  ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep "rnr_v1.0.0-linux_amd64" | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
+  # Szukaj asset o nazwie rnr_<tag>-<platform> (wzorzec dynamiczny po wersji)
+  # Kolejność priorytetów:
+  #   1. rnr_v1.0.0-linux_amd64   (dokładna platforma)
+  #   2. rnr_v1.0.0-linux         (tylko OS)
+  #   3. cokolwiek z PLATFORM w nazwie
+  #   4. cokolwiek z OS w nazwie
 
-  # 2. Jeśli nie znaleziono dokładnej nazwy, wracamy do ogólnego dopasowania po platformie.
+  local tag_clean="${RELEASE_TAG_RESOLVED#v}"  # bez 'v' prefix
+
+  ASSET_URL=$(echo "$response" | grep "browser_download_url" | \
+    grep -i "${RELEASE_TAG_RESOLVED}-${PLATFORM}\|rnr_${tag_clean}-${PLATFORM}\|rnr_v${tag_clean}-${PLATFORM}" | \
+    sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
+
   if [[ -z "$ASSET_URL" ]]; then
-    ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep "${PLATFORM}" | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
+    ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep -i "${PLATFORM}" | \
+      sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
   fi
 
-  # 3. Jeśli nadal nic, spróbuj ogólnie po OS (np. pojedyncza binarka dla systemu).
   if [[ -z "$ASSET_URL" ]]; then
-    ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep "${OS}" | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
+    ASSET_URL=$(echo "$response" | grep "browser_download_url" | grep -i "${OS}" | \
+      sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' | head -1)
   fi
 
   if [[ -z "$ASSET_URL" ]]; then
-    die "Brak pliku binarnego dla platformy '${PLATFORM}' w release '${RELEASE_TAG_RESOLVED}'.\n\nDostępne pliki:\n$(echo "$response" | grep '"name"' | grep -v "tag_name" | sed 's/.*"name": *"\([^"]*\)".*/  • \1/')"
+    local available
+    available=$(echo "$response" | grep '"name"' | grep -v "tag_name" | \
+      sed 's/.*"name": *"\([^"]*\)".*/  • \1/' | head -10)
+    die "Brak pliku binarnego dla platformy '${PLATFORM}' w release '${RELEASE_TAG_RESOLVED}'.\n\nDostępne pliki:\n${available}\n\nLub uruchom tryb lokalny: ./install.sh --local"
   fi
 
-  info "Plik: ${ASSET_URL##*/}"
+  info "Asset: ${CYAN}${ASSET_URL##*/}${NC}"
 }
 
-# ─── Pobieranie Binarki ────────────────────────────────────────────────────
+# ─── Pobieranie i rozpakowywanie binarki ──────────────────────────────────
 
 download_binary() {
-  step "Pobieranie pliku binarnego..."
+  step "Pobieranie binarki..."
 
-  # Utwórz tymczasowy katalog
   TMP_DIR=$(mktemp -d)
+  # Sprzątaj po sobie nawet przy błędzie
   trap 'rm -rf "$TMP_DIR"' EXIT
 
-  local archive_file="${TMP_DIR}/rnr_archive"
+  local archive_file="${TMP_DIR}/rnr_download"
 
-  # Pobierz (z autoryzacją jeśli dostępny jest token)
+  local curl_opts=(-fsSL --progress-bar -H "Accept: application/octet-stream" -L -o "$archive_file")
   if [[ -n "$GITHUB_TOKEN" ]]; then
-    curl -fsSL --progress-bar \
-      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-      -H "Accept: application/octet-stream" \
-      -L "$ASSET_URL" \
-      -o "$archive_file" || die "Pobieranie nieudane. Sprawdź połączenie sieciowe i token."
-  else
-    curl -fsSL --progress-bar \
-      -H "Accept: application/octet-stream" \
-      -L "$ASSET_URL" \
-      -o "$archive_file" || die "Pobieranie nieudane. Sprawdź połączenie sieciowe."
+    curl_opts+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
   fi
 
-  success "Pobrano plik"
+  curl "${curl_opts[@]}" "$ASSET_URL" || die "Pobieranie nieudane. Sprawdź połączenie sieciowe."
 
-  # Rozpakuj
+  success "Pobrano ($(du -sh "$archive_file" 2>/dev/null | cut -f1 || echo '?'))"
+
   step "Rozpakowywanie..."
 
-  if [[ "$ASSET_URL" == *.tar.gz ]]; then
-    tar -xzf "$archive_file" -C "$TMP_DIR" || die "Błąd rozpakowywania archiwum tar.gz"
+  local binary_in_tmp="${TMP_DIR}/${BINARY_NAME}"
+
+  if [[ "$ASSET_URL" == *.tar.gz || "$ASSET_URL" == *.tgz ]]; then
+    tar -xzf "$archive_file" -C "$TMP_DIR" || die "Błąd rozpakowywania tar.gz"
+    # Znajdź binarki w wypakowanych plikach
+    local found
+    found=$(find "$TMP_DIR" -name "${BINARY_NAME}" -not -name "*.tar.gz" -type f 2>/dev/null | head -1)
+    if [[ -n "$found" ]]; then
+      binary_in_tmp="$found"
+    fi
   elif [[ "$ASSET_URL" == *.zip ]]; then
-    unzip -q "$archive_file" -d "$TMP_DIR" || die "Błąd rozpakowywania archiwum zip"
-  elif file "$archive_file" 2>/dev/null | grep -q "executable"; then
-    # Bezpośredni plik binarny
-    cp "$archive_file" "${TMP_DIR}/${BINARY_NAME}"
+    command -v unzip &>/dev/null || die "Wymagane narzędzie 'unzip' nie jest zainstalowane."
+    unzip -q "$archive_file" -d "$TMP_DIR" || die "Błąd rozpakowywania zip"
+    local found
+    found=$(find "$TMP_DIR" -name "${BINARY_NAME}" -not -name "*.zip" -type f 2>/dev/null | head -1)
+    if [[ -n "$found" ]]; then
+      binary_in_tmp="$found"
+    fi
   else
-    # Spróbuj traktować jako plik binarny
-    cp "$archive_file" "${TMP_DIR}/${BINARY_NAME}"
+    # Bezpośredni plik binarny — skopiuj i nadaj prawa
+    cp "$archive_file" "$binary_in_tmp"
   fi
 
-  # Znajdź binarny plik
-  BINARY_PATH=$(find "$TMP_DIR" -name "${BINARY_NAME}" -o -name "${BINARY_NAME}.exe" 2>/dev/null | head -1)
-  if [[ -z "$BINARY_PATH" ]]; then
-    # Ostatnia próba: użyj pobranego pliku bezpośrednio
-    BINARY_PATH="$archive_file"
+  if [[ ! -f "$binary_in_tmp" ]]; then
+    die "Nie znaleziono binarki '${BINARY_NAME}' po rozpakowaniu.\nSprawdź zawartość release na GitHub."
   fi
 
-  success "Rozpakowano"
+  chmod +x "$binary_in_tmp"
+  BINARY_PATH="$binary_in_tmp"
+  success "Rozpakowywanie zakończone"
 }
 
 # ─── Instalacja ───────────────────────────────────────────────────────────
 
 install_binary() {
-  step "Instalowanie do ${INSTALL_DIR}/..."
+  step "Instalowanie do '${INSTALL_DIR}/'..."
 
-  # Utwórz katalog docelowy
-  mkdir -p "$INSTALL_DIR"
+  mkdir -p "$INSTALL_DIR" || die "Nie można utworzyć katalogu '$INSTALL_DIR'"
 
-  # Skopiuj binarny plik
   local dest="${INSTALL_DIR}/${BINARY_NAME}"
-  cp "$BINARY_PATH" "$dest" || die "Nie można skopiować pliku binarnego"
-  chmod +x "$dest" || die "Nie można nadać uprawnień wykonania"
+  cp "$BINARY_PATH" "$dest" || die "Nie można skopiować binarki"
+  chmod +x "$dest"
 
+  INSTALLED_BINARY="$dest"
   success "Zainstalowano: ${CYAN}${dest}${NC}"
 }
 
 # ─── Weryfikacja ──────────────────────────────────────────────────────────
 
 verify_installation() {
-  step "Weryfikacja instalacji..."
+  step "Weryfikacja..."
 
-  local binary="${INSTALL_DIR}/${BINARY_NAME}"
+  local binary="${INSTALLED_BINARY:-${INSTALL_DIR}/${BINARY_NAME}}"
 
   if [[ ! -f "$binary" ]]; then
     die "Plik binarny nie istnieje: $binary"
   fi
-
   if [[ ! -x "$binary" ]]; then
-    die "Plik binarny nie ma uprawnień wykonania"
+    chmod +x "$binary" || die "Nie można nadać uprawnień wykonania: $binary"
   fi
 
-  local version
-  version=$("$binary" version 2>/dev/null || echo "dev")
-  success "rnr ${version} zainstalowany pomyślnie"
+  # Uruchom z timeoutem — TUI blokuje, więc używamy 'version' subcommand
+  local ver
+  if command -v timeout &>/dev/null; then
+    ver=$(timeout 3 "$binary" version 2>/dev/null || echo "?")
+  else
+    ver=$("$binary" version 2>/dev/null || echo "?")
+  fi
+
+  success "Działa: ${CYAN}${ver}${NC}"
 }
 
-# ─── Instalacja wymaganych CLI ────────────────────────────────────────────
-# rnr jest wrapperem dla zewnętrznych narzędzi CLI.
-# Instalujemy je automatycznie gdy możliwe, lub podajemy instrukcje.
+# ─── Sprawdzenie narzędzi zewnętrznych (providers) ────────────────────────
 
 setup_providers() {
   echo ""
-  step "Sprawdzanie narzędzi zewnętrznych (CLI providers)..."
+  step "Sprawdzanie narzędzi zewnętrznych..."
 
-  local has_node=false
+  # Node.js
   if command -v node &>/dev/null; then
-    has_node=true
-    local node_ver
-    node_ver=$(node --version 2>/dev/null || echo "?")
-    success "Node.js: ${CYAN}${node_ver}${NC}"
+    success "Node.js: ${CYAN}$(node --version 2>/dev/null)${NC}"
   else
-    warn "Node.js nie znaleziono — pomiń jeśli nie używasz npm/Netlify/Supabase"
+    warn "Node.js nie znaleziono — wymagany dla Netlify/Vercel/npm projektów"
   fi
 
-  # ── Netlify CLI ────────────────────────────────────────────────────────
+  # Netlify CLI
   if command -v netlify &>/dev/null; then
-    local netlify_ver
-    netlify_ver=$(netlify --version 2>/dev/null | head -1 || echo "?")
-    success "netlify-cli: ${CYAN}${netlify_ver}${NC}"
+    success "netlify-cli: ${CYAN}$(netlify --version 2>/dev/null | head -1)${NC}"
   else
-    if [[ "$has_node" == "true" ]]; then
-      info "Instaluję netlify-cli (wymagane do wdrożeń Netlify)..."
-      if npm install -g netlify-cli --quiet 2>/dev/null; then
+    if command -v npm &>/dev/null; then
+      info "Instaluję netlify-cli..."
+      if npm install -g netlify-cli --quiet --no-audit 2>/dev/null; then
         success "netlify-cli zainstalowany"
       else
         warn "Nie udało się zainstalować netlify-cli automatycznie"
-        warn "Uruchom ręcznie: ${BOLD}npm install -g netlify-cli${NC}"
+        warn "Zainstaluj ręcznie: ${BOLD}npm install -g netlify-cli${NC}"
       fi
     else
-      warn "netlify-cli nie zainstalowany — jeśli używasz Netlify, zainstaluj:"
-      echo -e "  ${BOLD}npm install -g netlify-cli${NC}"
+      warn "netlify-cli nie zainstalowany — jeśli używasz Netlify:\n  ${BOLD}npm install -g netlify-cli${NC}"
     fi
   fi
 
-  # ── Supabase CLI ───────────────────────────────────────────────────────
+  # Supabase CLI
   if command -v supabase &>/dev/null; then
-    local supa_ver
-    supa_ver=$(supabase --version 2>/dev/null || echo "?")
-    success "supabase-cli: ${CYAN}${supa_ver}${NC}"
+    success "supabase-cli: ${CYAN}$(supabase --version 2>/dev/null)${NC}"
   else
-    warn "supabase-cli nie zainstalowany — jeśli używasz Supabase, zainstaluj:"
-    if [[ "$OS" == "darwin" ]]; then
-      echo -e "  ${BOLD}brew install supabase/tap/supabase${NC}"
-    elif [[ "$has_node" == "true" ]]; then
-      echo -e "  ${BOLD}npm install -g supabase${NC}  lub  brew install supabase/tap/supabase${NC}"
-    else
-      echo -e "  ${BOLD}https://supabase.com/docs/guides/cli/getting-started${NC}"
-    fi
+    warn "supabase-cli nie zainstalowany — jeśli używasz Supabase:\n  ${BOLD}npm install -g supabase${NC}  lub  ${BOLD}brew install supabase/tap/supabase${NC}"
   fi
 
-  # ── Git ────────────────────────────────────────────────────────────────
+  # Git
   if command -v git &>/dev/null; then
-    local git_ver
-    git_ver=$(git --version 2>/dev/null || echo "?")
-    success "git: ${CYAN}${git_ver}${NC}"
+    success "git: ${CYAN}$(git --version 2>/dev/null)${NC}"
   else
-    warn "git nie zainstalowany — zalecane dla większości projektów"
-    echo -e "  ${BOLD}sudo apt install git${NC}  lub  ${BOLD}brew install git${NC}"
+    warn "git nie zainstalowany: ${BOLD}sudo apt install git${NC}"
   fi
 
-  # ── curl (wymagane do health checków) ────────────────────────────────
+  # curl
   if command -v curl &>/dev/null; then
     success "curl: ${CYAN}$(curl --version 2>/dev/null | head -1 | cut -d' ' -f1-2)${NC}"
   fi
 }
 
-# ─── Konfiguracja PATH ────────────────────────────────────────────────────
+# ─── Podsumowanie ─────────────────────────────────────────────────────────
 
-setup_path() {
+print_summary() {
   local binary_dir
-  binary_dir=$(realpath "$INSTALL_DIR")
+  binary_dir=$(realpath "$INSTALL_DIR" 2>/dev/null || echo "$INSTALL_DIR")
 
   echo ""
-  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  echo -e "${GREEN}  ✅ rnr został zainstalowany pomyślnie!${NC}"
-  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${GREEN}  ✅  rnr zainstalowany pomyślnie w ${CYAN}${binary_dir}/rnr${NC}"
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo ""
-  echo -e "  Uruchom rnr z bieżącego projektu:"
+  echo -e "  Uruchom z katalogu projektu:"
   echo ""
-  echo -e "  ${CYAN}${BOLD}./.rnr/rnr${NC}          # Uruchom TUI"
-  echo -e "  ${CYAN}${BOLD}./.rnr/rnr init${NC}     # Kreator konfiguracji"
-  echo -e "  ${CYAN}${BOLD}./.rnr/rnr --help${NC}   # Pomoc"
+  echo -e "  ${CYAN}${BOLD}./.rnr/rnr${NC}          → uruchamia TUI"
+  echo -e "  ${CYAN}${BOLD}./.rnr/rnr init${NC}     → kreator konfiguracji (pierwszy raz)"
+  echo -e "  ${CYAN}${BOLD}./.rnr/rnr --help${NC}   → lista komend"
   echo ""
-
-  # Zaproponuj alias
-  echo -e "  ${YELLOW}💡 Opcjonalnie: dodaj alias do ~/.bashrc lub ~/.zshrc:${NC}"
+  echo -e "  ${YELLOW}${BOLD}💡 Dodaj alias (wklej do ~/.bashrc lub ~/.zshrc):${NC}"
   echo ""
-  echo -e "  ${BOLD}alias rnr='./.rnr/rnr'${NC}"
+  echo -e "     ${BOLD}alias rnr='./.rnr/rnr'${NC}"
   echo ""
-  echo -e "  ${YELLOW}💡 Lub dodaj do PATH:${NC}"
+  echo -e "  ${YELLOW}${BOLD}💡 Lub dodaj katalog do PATH:${NC}"
   echo ""
-  echo -e "  ${BOLD}export PATH=\"\$PATH:${binary_dir}\"${NC}"
+  echo -e "     ${BOLD}export PATH=\"\$PATH:${binary_dir}\"${NC}"
   echo ""
-  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
 }
 
 # ─── Główna logika ────────────────────────────────────────────────────────
 
 main() {
-  echo ""
-  echo -e "${PURPLE}${BOLD}"
-  echo "  ██████╗ ███╗   ██╗██████╗ "
-  echo "  ██╔══██╗████╗  ██║██╔══██╗"
-  echo "  ██████╔╝██╔██╗ ██║██████╔╝"
-  echo "  ██╔══██╗██║╚██╗██║██╔══██╗"
-  echo "  ██║  ██║██║ ╚████║██║  ██║"
-  echo "  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝"
-  echo -e "${NC}"
-  echo -e "  ${CYAN}runner — Instalator${NC}"
-  echo ""
+  print_logo
 
-  check_requirements
-  detect_platform
-  fetch_release_info
-  download_binary
-  install_binary
-  verify_installation
+  if [[ "$LOCAL_MODE" == "true" ]]; then
+    # ── Tryb lokalny: skopiuj skompilowaną binarki ─────────────────────
+    install_local
+    verify_installation
+  else
+    # ── Tryb zdalny: pobierz z GitHub Releases ─────────────────────────
+    check_requirements
+    detect_platform
+    fetch_release_info
+    download_binary
+    install_binary
+    verify_installation
+  fi
+
   setup_providers
-  setup_path
+  print_summary
 }
 
 main "$@"
