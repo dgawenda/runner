@@ -106,13 +106,18 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	// ── Wczytaj zmienne z pliku .env ─────────────────────────────────────
 	// Zmienne z .env są potrzebne podczas builda i wdrożenia.
 	// Sekrety są automatycznie maskowane w logach.
-	dotEnvVars := readDotEnv(".")
+	// Używamy p.projectRoot, żeby zawsze trafić w właściwy katalog projektu.
+	workdir := p.projectRoot
+	if workdir == "" {
+		workdir = "."
+	}
+	dotEnvVars := readDotEnv(workdir)
 	if len(dotEnvVars) > 0 {
 		send(outputCh, fmt.Sprintf("📄 Netlify: załadowano %d zmiennych z .env", len(dotEnvVars)))
 	}
 
 	// Buduj argumenty komendy
-	args := []string{"deploy", "--site", d.NetlifySiteID, "--dir", "."}
+	args := []string{"deploy", "--site", d.NetlifySiteID, "--dir", workdir}
 	if d.NetlifyProd {
 		args = append(args, "--prod")
 		send(outputCh, "🚀 Netlify: wdrożenie na PRODUKCJĘ (--prod)")
@@ -146,7 +151,7 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 		}(),
 	))
 
-	runner := NewRunner(".", p.masker, p.log)
+	runner := NewRunner(workdir, p.masker, p.log)
 	result := runner.RunCommand(ctx, "netlify", args, envVars, outputCh)
 
 	if result.Error != nil {

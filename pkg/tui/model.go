@@ -802,23 +802,31 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 
 func (m *RootModel) cmdInitDeploy(envName string) tea.Cmd {
 	return func() tea.Msg {
-		// Sprawdź czystość repo tylko dla projektów Git z niezatwierdzonymi zmianami.
-		// rnr wykona git checkout na odpowiednią gałąź — niezatwierdzone zmiany
-		// mogą być nadpisane lub powodować konflikty. Blokujemy przed deploy.
+		// Sprawdź czystość repo tylko dla projektów Git ze ŚLEDZONYMI modyfikacjami.
+		// Pliki nieśledzone (??) nie wpływają na git checkout — nie blokujemy deployu.
+		// Blokujemy tylko gdy są ŚLEDZONE modyfikacje (M, D, A, R, C, U).
 		if m.gitStatus != nil && m.gitStatus.IsGitRepo && !m.gitStatus.IsClean {
-			return ErrorMsg{
-				Title: "Niezatwierdzone zmiany",
-				Message: fmt.Sprintf(
-					"Znaleziono %d niezatwierdzonych plików.\n\n"+
-						"rnr wykona git checkout na gałąź środowiska — niezatwierdzone\n"+
-						"zmiany mogą ulec utracie lub powodować konflikty.\n\n"+
-						"Zatwierdź zmiany przed wdrożeniem:\n"+
-						"  git add . && git commit -m 'opis'\n\n"+
-						"lub odłóż na bok:\n"+
-						"  git stash",
-					len(m.gitStatus.DirtyFiles),
-				),
-				Err: fmt.Errorf("niezatwierdzone zmiany"),
+			var trackedDirty []gitops.DirtyFile
+			for _, f := range m.gitStatus.DirtyFiles {
+				if f.Status != "??" {
+					trackedDirty = append(trackedDirty, f)
+				}
+			}
+			if len(trackedDirty) > 0 {
+				return ErrorMsg{
+					Title: "Niezatwierdzone zmiany",
+					Message: fmt.Sprintf(
+						"Znaleziono %d niezatwierdzonych plików (śledzone).\n\n"+
+							"rnr wykona git checkout na gałąź środowiska — niezatwierdzone\n"+
+							"zmiany mogą ulec utracie lub powodować konflikty.\n\n"+
+							"Zatwierdź zmiany przed wdrożeniem:\n"+
+							"  git add . && git commit -m 'opis'\n\n"+
+							"lub odłóż na bok:\n"+
+							"  git stash",
+						len(trackedDirty),
+					),
+					Err: fmt.Errorf("niezatwierdzone zmiany"),
+				}
 			}
 		}
 		if env, ok := m.cfg.Environments[envName]; ok && env.Protected {
@@ -1202,17 +1210,50 @@ func (m *RootModel) cmdRunPipeline(envName string, stages []config.Stage, ch cha
 			defer log.Close()
 		}
 
+		// Panic recovery — zapisz crash do logu i zakończ pipeline z błędem
+		defer func() {
+			if r := recover(); r != nil {
+				panicErr := fmt.Errorf("PANIC w pipeline: %v", r)
+				if log != nil {
+					log.Error("══════════════════════════════════════════")
+					log.Error("KRYTYCZNY BŁĄD (panic): %v", r)
+					log.Error("══════════════════════════════════════════")
+				}
+				ch <- pipelineEventMsg{kind: "fail", deployID: deployID,
+					name: "PANIC", err: panicErr}
+				close(ch)
+			}
+		}()
+
 		envCfg := m.cfg.Environments[envName]
+
+		// Nagłówek logu wdrożenia
+		if log != nil {
+			log.Info("══════════════════════════════════════════════════════")
+			log.Info("rnr deploy: środowisko=%s gałąź=%s etapów=%d",
+				envName, snap.Branch, len(stages))
+			log.Info("commit: %s %s", snap.CommitHash, commitMsg)
+			log.Info("══════════════════════════════════════════════════════")
+		}
 
 		// Krok 3: Wykonaj etapy
 		for i, stage := range stages {
 			ch <- pipelineEventMsg{kind: "stage_start", index: i, name: stage.Name}
 			startTime := time.Now()
 
-			// Kanał wyjścia etapu
+			// Loguj start etapu
+			if log != nil {
+				log.Info("┌─ [%d/%d] %s", i+1, len(stages), stage.Name)
+			}
+
+			// Kanał wyjścia etapu — każda linia trafia do TUI i do pliku logu
 			outputCh := make(chan string, 128)
 			go func(idx int) {
 				for line := range outputCh {
+					// Zapisz każdą linię wyjścia do pliku logu
+					if log != nil {
+						log.Raw(line)
+					}
 					ch <- pipelineEventMsg{kind: "stage_output", index: idx, line: line}
 				}
 			}(i)
@@ -1279,24 +1320,46 @@ func (m *RootModel) cmdRunPipeline(envName string, stages []config.Stage, ch cha
 			}
 		}
 
-			close(outputCh)
-			durMS := time.Since(startTime).Milliseconds()
+		close(outputCh)
+		durMS := time.Since(startTime).Milliseconds()
 
 			if stageErr != nil {
+				if log != nil {
+					log.Error("└─ [%d/%d] FAIL: %s (%s): %v",
+						i+1, len(stages), stage.Name, formatDuration(durMS), stageErr)
+				}
 				if stage.AllowFailure {
 					ch <- pipelineEventMsg{kind: "stage_fail", index: i, name: stage.Name,
 						durationMS: durMS, err: stageErr, allowFail: true}
 				} else {
 					ch <- pipelineEventMsg{kind: "stage_fail", index: i, name: stage.Name,
 						durationMS: durMS, err: stageErr, allowFail: false}
+					// Loguj ogólne niepowodzenie deployu
+					if log != nil {
+						log.Error("══════════════════════════════════════════════════════")
+						log.Error("DEPLOY NIEUDANY — etap: %s", stage.Name)
+						log.Error("══════════════════════════════════════════════════════")
+					}
 					ch <- pipelineEventMsg{kind: "fail", deployID: deployID,
 						name: stage.Name, err: stageErr}
 					close(ch)
 					return nil
 				}
 			} else {
+				if log != nil {
+					log.Success("└─ [%d/%d] OK: %s (%s)", i+1, len(stages), stage.Name, formatDuration(durMS))
+				}
 				ch <- pipelineEventMsg{kind: "stage_done", index: i, name: stage.Name, durationMS: durMS}
 			}
+		}
+
+		// Podsumowanie w logu
+		total := time.Since(now)
+		if log != nil {
+			log.Success("══════════════════════════════════════════════════════")
+			log.Success("DEPLOY ZAKOŃCZONY SUKCESEM — środowisko: %s, czas: %s",
+				envName, total.Round(time.Millisecond).String())
+			log.Success("══════════════════════════════════════════════════════")
 		}
 
 		ch <- pipelineEventMsg{kind: "done", deployID: deployID, logFile: logFile}
