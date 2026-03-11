@@ -40,17 +40,18 @@ import (
 type Screen int
 
 const (
-	ScreenLoading   Screen = iota // Ładowanie konfiguracji
-	ScreenWizard                  // Setup Wizard (pierwsze uruchomienie)
-	ScreenDashboard               // Główny Dashboard
-	ScreenConfirm                 // Potwierdzenie wdrożenia (środowiska chronione)
-	ScreenDeploy                  // Ekran wdrożenia z progress bars
-	ScreenGit                     // Git Panel — status, gałęzie, historia, commit
-	ScreenRollback                // Ekran rollbacku
-	ScreenPromote                 // Ekran promote (migracje DB)
-	ScreenLogs                    // Przeglądarka logów
-	ScreenError                   // Ekran błędu
-	ScreenEnvAdd                  // Kreator dodawania nowego środowiska
+	ScreenLoading      Screen = iota // Ładowanie konfiguracji
+	ScreenWizard                     // Setup Wizard (pierwsze uruchomienie)
+	ScreenDashboard                  // Główny Dashboard
+	ScreenConfirm                    // Potwierdzenie wdrożenia (środowiska chronione)
+	ScreenDeploy                     // Ekran wdrożenia z progress bars
+	ScreenGit                        // Git Panel — status, gałęzie, historia, commit
+	ScreenRollback                   // Ekran wykonywania rollbacku (progress bars)
+	ScreenRollbackPick               // Ekran wyboru wdrożenia do rollbacku (lista)
+	ScreenPromote                    // Ekran promote (migracje DB)
+	ScreenLogs                       // Przeglądarka logów
+	ScreenError                      // Ekran błędu
+	ScreenEnvAdd                     // Kreator dodawania nowego środowiska
 )
 
 // ─── Wiadomości wewnętrzne pipeline ───────────────────────────────────────
@@ -66,6 +67,17 @@ type pipelineEventMsg struct {
 	err        error
 	deployID   string
 	logFile    string
+}
+
+// ─── RollbackPickState ────────────────────────────────────────────────────
+
+// rollbackPickState przechowuje stan ekranu wyboru wdrożenia do rollbacku.
+type rollbackPickState struct {
+	env     string
+	records []state.DeployRecord
+	cursor  int
+	// onlyOne — true gdy jest tylko 1 wdrożenie (rollback możliwy, ale bez poprzedniej wersji)
+	onlyOne bool
 }
 
 // ─── Root Model ────────────────────────────────────────────────────────────
@@ -118,8 +130,11 @@ type RootModel struct {
 	// Kanał pipeline
 	pipelineCh chan pipelineEventMsg
 
-	// Rollback
+	// Rollback — ekran wykonania (ScreenRollback)
 	rollbackEnv string
+
+	// RollbackPick — ekran wyboru wdrożenia (ScreenRollbackPick)
+	rollbackPick rollbackPickState
 
 	// Promote
 	promoteSource string
@@ -427,7 +442,17 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.cmdWaitPipeline())
 		}
 
-	// ── Rollback ─────────────────────────────────────────────────────
+	// ── Rollback — wybór wdrożenia ────────────────────────────────────
+	case ShowRollbackPickMsg:
+		m.rollbackPick = rollbackPickState{
+			env:     msg.Env,
+			records: msg.Records,
+			cursor:  0,
+			onlyOne: len(msg.Records) == 1,
+		}
+		m.screen = ScreenRollbackPick
+
+	// ── Rollback — wykonanie ──────────────────────────────────────────
 	case RollbackStartMsg:
 		cmds = append(cmds, m.cmdExecuteRollback(msg))
 
@@ -536,6 +561,8 @@ func (m *RootModel) View() string {
 		return m.dashboard.View()
 	case ScreenDeploy, ScreenRollback:
 		return m.deploy.View()
+	case ScreenRollbackPick:
+		return m.viewRollbackPick()
 	case ScreenConfirm:
 		return m.viewConfirm()
 	case ScreenPromote:
@@ -596,6 +623,140 @@ func (m *RootModel) viewConfirm() string {
 		StylePanelError.Width(maxW).Render(content))
 }
 
+// viewRollbackPick renderuje ekran wyboru wdrożenia do rollbacku.
+// Wyświetla interaktywną listę udanych wdrożeń z danymi:
+// numer, data, hash commita, wiadomość, autor.
+func (m *RootModel) viewRollbackPick() string {
+	maxW := min(m.width-4, 82)
+	rp := m.rollbackPick
+	records := rp.records
+
+	// ── Nagłówek ──────────────────────────────────────────────────────────
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+	envBadge := EnvBadge(rp.env)
+	titleStr := headerStyle.Render("↩️  Rollback — wybierz wdrożenie")
+
+	subStr := lipgloss.NewStyle().Foreground(ColorSubtext).
+		Render("Wybrane wdrożenie zostanie przywrócone do środowiska " + rp.env + ".")
+
+	// ── Ostrzeżenie dla jedynego wdrożenia ────────────────────────────────
+	warnStr := ""
+	if rp.onlyOne {
+		warnStr = StyleWarning.Render(
+			"⚠️  Tylko jedno wdrożenie w historii — rollback przywróci obecny stan kodu.",
+		)
+	}
+
+	// ── Lista wdrożeń ─────────────────────────────────────────────────────
+	selectedStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("#44475A")).
+		Foreground(lipgloss.Color("#F8F8F2")).
+		Bold(true)
+	normalStyle := lipgloss.NewStyle().Foreground(ColorText)
+	mutedStyle := lipgloss.NewStyle().Foreground(ColorSubtext)
+	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Bold(true)
+	successStyle := lipgloss.NewStyle().Foreground(ColorSuccess)
+	rolledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9"))
+
+	var rows []string
+	// Nagłówek tabeli
+	headerRow := mutedStyle.Render(fmt.Sprintf(
+		"  %-3s  %-16s  %-7s  %-8s  %s",
+		"#", "Data", "Commit", "Status", "Opis",
+	))
+	rows = append(rows, headerRow)
+	rows = append(rows, mutedStyle.Render(strings.Repeat("─", min(maxW-6, 74))))
+
+	for i, rec := range records {
+		cursor := "  "
+		if i == rp.cursor {
+			cursor = "▶ "
+		}
+
+		// Format daty
+		dateStr := rec.StartedAt.Format("02.01 15:04")
+
+		// Krótki hash commita (7 znaków)
+		hash := rec.CommitHash
+		if len(hash) > 7 {
+			hash = hash[:7]
+		}
+		if hash == "" {
+			hash = "-------"
+		}
+
+		// Status ikonka
+		statusStr := ""
+		switch rec.Status {
+		case state.StatusSuccess:
+			statusStr = successStyle.Render("✓ ok    ")
+		case state.StatusRolledBack:
+			statusStr = rolledStyle.Render("↩ cofn. ")
+		default:
+			statusStr = mutedStyle.Render("? unk.  ")
+		}
+
+		// Wiadomość commita (skrócona)
+		msg := truncateString(rec.CommitMessage, 38)
+		if msg == "" {
+			msg = mutedStyle.Render("(brak opisu)")
+		}
+
+		// Autor (skrócony)
+		author := truncateString(rec.CommitAuthor, 14)
+		if author != "" {
+			msg += mutedStyle.Render("  @" + author)
+		}
+
+		rowContent := fmt.Sprintf("%s%-3d  %-16s  %s  %s  %s",
+			cursor,
+			i+1,
+			dateStr,
+			hashStyle.Render(hash),
+			statusStr,
+			msg,
+		)
+
+		if i == rp.cursor {
+			rows = append(rows, selectedStyle.Render(" "+rowContent+" "))
+		} else {
+			rows = append(rows, normalStyle.Render(" "+rowContent))
+		}
+	}
+
+	listStr := strings.Join(rows, "\n")
+
+	// ── Skróty klawiaturowe ───────────────────────────────────────────────
+	navHint := StyleMuted.Render(
+		"\n  ↑↓ / j k = nawigacja   " +
+			"ENTER / SPACJA = potwierdź rollback   " +
+			"ESC / Q = anuluj",
+	)
+
+	// ── Złóż widok ────────────────────────────────────────────────────────
+	parts := []string{"", titleStr, "", envBadge, "", subStr, ""}
+	if warnStr != "" {
+		parts = append(parts, warnStr, "")
+	}
+	parts = append(parts, listStr, navHint, "")
+
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top,
+		StylePanelAccent.Width(maxW).Render(content))
+}
+
+// truncateString skraca string do maxLen znaków, dodając "…" jeśli jest dłuższy.
+func truncateString(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	if maxLen <= 1 {
+		return "…"
+	}
+	return string(runes[:maxLen-1]) + "…"
+}
+
 func (m *RootModel) viewCentered(content string) string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
@@ -639,6 +800,43 @@ func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		if msg.String() == "ctrl+c" {
 			return tea.Quit
+		}
+
+	case ScreenRollbackPick:
+		// Obsługa nawigacji na liście wdrożeń
+		n := len(m.rollbackPick.records)
+		switch msg.String() {
+		case "ctrl+c":
+			return tea.Quit
+		case "esc", "q", "Q":
+			// Anuluj — wróć do Dashboard
+			m.screen = ScreenDashboard
+		case "up", "k", "K":
+			if m.rollbackPick.cursor > 0 {
+				m.rollbackPick.cursor--
+			}
+		case "down", "j", "J":
+			if m.rollbackPick.cursor < n-1 {
+				m.rollbackPick.cursor++
+			}
+		case "enter", " ":
+			// Potwierdź — uruchom rollback do wybranego wdrożenia
+			if n > 0 {
+				rec := m.rollbackPick.records[m.rollbackPick.cursor]
+				m.screen = ScreenDashboard // zmieniony przez cmdExecuteRollback → ScreenRollback
+				return func() tea.Msg {
+					return RollbackStartMsg{
+						Env:        rec.Env,
+						DeployID:   rec.ID,
+						CommitHash: rec.CommitHash,
+						Branch:     rec.Branch,
+						Description: fmt.Sprintf("%s — %s",
+							rec.StartedAt.Format("2006-01-02 15:04"),
+							truncateString(rec.CommitMessage, 50),
+						),
+					}
+				}
+			}
 		}
 	}
 	return nil
@@ -913,23 +1111,72 @@ func (m *RootModel) cmdInitDeploy(envName string) tea.Cmd {
 	}
 }
 
+// cmdInitRollback inicjuje procedurę rollbacku.
+// Ładuje historię wdrożeń dla środowiska i:
+//   - brak jakichkolwiek wdrożeń → ErrorMsg (pierwsze wdrożenie, rollback niemożliwy)
+//   - 1+ udanych wdrożeń → ShowRollbackPickMsg (ekran wyboru)
 func (m *RootModel) cmdInitRollback(envName string) tea.Cmd {
 	return func() tea.Msg {
-		if m.stateData == nil {
-			return ErrorMsg{Title: "Brak historii", Message: "Nie znaleziono historii wdrożeń."}
-		}
-		last := m.stateData.GetLastSuccessful(envName)
-		if last == nil {
+		// ── Walidacja stanu ───────────────────────────────────────────────────
+		if envName == "" {
 			return ErrorMsg{
-				Title:   "Brak snapshotu",
-				Message: fmt.Sprintf("Brak udanego wdrożenia dla '%s'.", envName),
+				Title:   "Brak środowiska",
+				Message: "Wybierz środowisko na Dashboardzie (↑↓), a następnie naciśnij R.",
 			}
 		}
-		return RollbackStartMsg{
-			Env:        envName,
-			DeployID:   last.ID,
-			CommitHash: last.Snapshot.CommitHash,
-			Branch:     last.Snapshot.Branch,
+
+		if m.stateData == nil {
+			return ErrorMsg{
+				Title: "Brak historii wdrożeń",
+				Message: "System nie znalazł pliku historii (.rnr/snapshots/state.json).\n\n" +
+					"Rollback jest możliwy dopiero po pierwszym wdrożeniu.\n" +
+					"Wykonaj wdrożenie klawiszem D i spróbuj ponownie.",
+			}
+		}
+
+		// ── Pobierz wszystkie udane wdrożenia dla środowiska ─────────────────
+		// Maksymalnie 20 ostatnich — więcej nie ma sensu wyświetlać.
+		allRecords := m.stateData.GetLastN(envName, 20)
+		var successful []state.DeployRecord
+		for _, r := range allRecords {
+			if r.Status == state.StatusSuccess || r.Status == state.StatusRolledBack {
+				successful = append(successful, r)
+			}
+		}
+
+		// ── Blokada: brak udanych wdrożeń = rollback niemożliwy ──────────────
+		if len(successful) == 0 {
+			// Sprawdź czy w ogóle było jakieś wdrożenie (może nieudane)
+			allAny := m.stateData.GetLastN(envName, 5)
+			if len(allAny) == 0 {
+				return ErrorMsg{
+					Title: "Rollback niemożliwy — pierwsze wdrożenie",
+					Message: fmt.Sprintf(
+						"Środowisko '%s' nie ma jeszcze żadnych wdrożeń.\n\n"+
+							"Rollback wymaga przynajmniej jednego zakończonego sukcesem\n"+
+							"wdrożenia, do którego można przywrócić kod.\n\n"+
+							"Uruchom pierwsze wdrożenie klawiszem D.",
+						envName,
+					),
+				}
+			}
+			return ErrorMsg{
+				Title: "Rollback niemożliwy — brak udanych wdrożeń",
+				Message: fmt.Sprintf(
+					"Środowisko '%s' nie ma żadnego wdrożenia zakończonego sukcesem.\n\n"+
+						"Wszystkie poprzednie wdrożenia zakończyły się błędem —\n"+
+						"nie ma do czego przywracać kodu.\n\n"+
+						"Napraw błędy i wykonaj pomyślne wdrożenie, aby rollback\n"+
+						"stał się dostępny.",
+					envName,
+				),
+			}
+		}
+
+		// ── Otwórz ekran wyboru wdrożenia ────────────────────────────────────
+		return ShowRollbackPickMsg{
+			Env:     envName,
+			Records: successful,
 		}
 	}
 }
@@ -1490,27 +1737,46 @@ func (m *RootModel) cmdMarkDeployFailed(deployID string) tea.Cmd {
 	}
 }
 
+// cmdExecuteRollback wykonuje rollback do wybranego wdrożenia.
+// Przywraca kod (git reset/checkout) do commita wybranego przez użytkownika
+// na ekranie ScreenRollbackPick, a następnie uruchamia ponowne wdrożenie
+// (redeploy) przywróconej wersji.
 func (m *RootModel) cmdExecuteRollback(msg RollbackStartMsg) tea.Cmd {
 	stages := m.cfg.GetStagesForEnv(msg.Env)
-	m.deploy = NewDeployModel(m.width, m.height, msg.Env, stages, true)
+	label := fmt.Sprintf("↩️  rollback → %s", func() string {
+		if msg.Description != "" {
+			return msg.Description
+		}
+		if msg.CommitHash != "" && len(msg.CommitHash) >= 7 {
+			return msg.CommitHash[:7]
+		}
+		return msg.Env
+	}())
+	// Rollback stages: najpierw git reset do wybranego commita, potem redeploy
+	rollbackStages := []config.Stage{
+		{
+			Name:        "git reset — przywracanie kodu",
+			Type:        config.StageTypeGit,
+			Run:         "checkout:" + msg.Branch,
+			Description: "Przywraca kod do stanu z wybranego wdrożenia",
+		},
+		{
+			Name:        "redeploy — wdrożenie przywróconej wersji",
+			Type:        config.StageTypeDeploy,
+			Description: "Wdraża przywróconą wersję kodu na serwer",
+		},
+	}
+	_ = label
+	_ = stages
+
+	m.rollbackEnv = msg.Env
+	m.deployEnv = msg.Env
+	m.deploy = NewDeployModel(m.width, m.height, msg.Env, rollbackStages, true)
 	m.screen = ScreenRollback
 
 	return func() tea.Msg {
 		ctx := context.Background()
 
-		// Przywróć do snapshotu wyłącznie przez hash commita.
-		// rnr NIE tworzy dodatkowych gałęzi — snapshot to commit hash, nie gałąź.
-		if msg.CommitHash != "" {
-			target := gitops.BuildRollbackTarget(msg.CommitHash, "", "", msg.Env)
-			if err := gitops.RestoreSnapshot(m.projectRoot, target); err != nil {
-				return RollbackFailedMsg{Err: err}
-			}
-		} else {
-			// Brak snapshotu (np. projekt bez Git) — tylko redeploy bieżącego stanu
-			// send(outputCh, "⚠️  Brak snapshotu git — redeployuję bieżący stan kodu...")
-		}
-
-		// Redeploy przywróconej wersji
 		envCfg, ok := m.cfg.Environments[msg.Env]
 		if !ok {
 			return RollbackFailedMsg{Err: fmt.Errorf("środowisko %q nie istnieje", msg.Env)}
@@ -1523,24 +1789,79 @@ func (m *RootModel) cmdExecuteRollback(msg RollbackStartMsg) tea.Cmd {
 		)
 		if log != nil {
 			defer log.Close()
+			log.Info("══════════════════════════════════════════════════════")
+			log.Info("↩️  Rollback: %s → commit %s", msg.Env, func() string {
+				if len(msg.CommitHash) >= 7 {
+					return msg.CommitHash[:7]
+				}
+				return msg.CommitHash
+			}())
+			if msg.Description != "" {
+				log.Info("  Wdrożenie: %s", msg.Description)
+			}
+			log.Info("══════════════════════════════════════════════════════")
 		}
 
-		outputCh := make(chan string, 128)
+		// ── Krok 1: Przywróć kod git do wybranego commita ────────────────────
+		if msg.CommitHash != "" {
+			if log != nil {
+				log.Info("git reset --hard %s", msg.CommitHash)
+			}
+			target := gitops.BuildRollbackTarget(msg.CommitHash, "", "", msg.Env)
+			if err := gitops.RestoreSnapshot(m.projectRoot, target); err != nil {
+				if log != nil {
+					log.Error("git reset nieudany: %v", err)
+				}
+				return RollbackFailedMsg{Err: fmt.Errorf("przywracanie kodu nieudane: %w", err)}
+			}
+			if log != nil {
+				log.Success("git reset OK — kod przywrócony do %s", msg.CommitHash[:min(7, len(msg.CommitHash))])
+			}
+		} else {
+			if log != nil {
+				log.Warn("Brak hash commita — pomijam git reset, redeployuję bieżący stan kodu")
+			}
+		}
+
+		// ── Krok 2: Redeploy przywróconej wersji ─────────────────────────────
+		if log != nil {
+			log.Info("Redeploy środowisko %s...", msg.Env)
+		}
+
+		// Kanał wyjścia z WaitGroup (nie panic na closed channel)
+		outputCh := make(chan string, 256)
+		var outputWg sync.WaitGroup
+		outputWg.Add(1)
 		go func() {
-			for range outputCh {
+			defer outputWg.Done()
+			for line := range outputCh {
+				if log != nil {
+					log.Raw(line)
+				}
 			}
 		}()
-		defer close(outputCh)
 
 		depProv, err := providers.NewDeployProvider(envCfg, masker, log, m.projectRoot)
 		if err != nil {
+			close(outputCh)
+			outputWg.Wait()
 			return RollbackFailedMsg{Err: err}
 		}
 
-		if err := depProv.Rollback(ctx, envCfg, outputCh); err != nil {
-			return RollbackFailedMsg{Err: err}
+		deployErr := depProv.Rollback(ctx, envCfg, outputCh)
+		close(outputCh)
+		outputWg.Wait()
+
+		if deployErr != nil {
+			if log != nil {
+				log.Error("Redeploy nieudany: %v", deployErr)
+			}
+			return RollbackFailedMsg{Err: fmt.Errorf("redeploy nieudany: %w", deployErr)}
 		}
 
+		if log != nil {
+			log.Success("Rollback zakończony sukcesem")
+		}
 		return RollbackCompletedMsg{Env: msg.Env}
 	}
 }

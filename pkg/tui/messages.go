@@ -107,13 +107,20 @@ type DeployFailedMsg struct {
 
 // ─── Wiadomości Rollbacku ─────────────────────────────────────────────────
 
-// RollbackStartMsg inicjuje procedurę rollbacku.
+// ShowRollbackPickMsg otwiera ekran wyboru wdrożenia do rollbacku.
+// Zawiera listę udanych wdrożeń dla danego środowiska posortowanych od najnowszych.
+type ShowRollbackPickMsg struct {
+	Env     string
+	Records []state.DeployRecord
+}
+
+// RollbackStartMsg inicjuje procedurę rollbacku do wybranego wdrożenia.
 type RollbackStartMsg struct {
 	Env         string
 	DeployID    string
-	CommitHash  string
+	CommitHash  string // hash commita który był wdrożony (przywracamy DO tego stanu)
 	Branch      string
-	Description string
+	Description string // opis wdrożenia (widoczny w ekranie rollbacku)
 }
 
 // RollbackProgressMsg niesie aktualizację postępu rollbacku.
