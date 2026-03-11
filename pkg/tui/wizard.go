@@ -11,6 +11,7 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -26,9 +27,10 @@ type WizardStep int
 const (
 	wizardStepWelcome WizardStep = iota
 	wizardStepProjectName
-	wizardStepRepo
-	wizardStepGitHubConnect   // Czy połączyć z GitHub remote? (HTTPS / SSH / Nie)
-	wizardStepProjectType     // HTML/npm/custom — wpływa na generowane stage'y
+	wizardStepRepo           // URL klonu GitHub (https:// lub git@) lub puste = repo lokalne
+	wizardStepGitHubCLI      // Sprawdzenie i konfiguracja GitHub CLI (gh)
+	wizardStepGitHubConnect  // Potwierdzenie remote (HTTPS / SSH / gh / Pomiń)
+	wizardStepProjectType    // HTML/npm/custom — wpływa na generowane stage'y
 	wizardStepDeployProvider
 	wizardStepNetlifyToken
 	wizardStepNetlifySiteMode // Czy masz już site? Wybierz: istniejący / utwórz nowy
@@ -72,11 +74,17 @@ var netlifySiteModes = []DeployProviderChoice{
 	{"Utwórz nowy projekt", "create", "✨", "rnr automatycznie założy nowy projekt Netlify"},
 }
 
-// gitHubConnectModes — jak połączyć repo z GitHub remote.
+// gitHubCLIModes — czy używać GitHub CLI.
+var gitHubCLIModes = []DeployProviderChoice{
+	{"Używam gh CLI (GitHub CLI)", "gh", "🐙", "rnr użyje `gh` do tworzenia repo i autoryzacji"},
+	{"Pomiń gh — tylko git push", "git", "📁", "Klasyczny git push (wymaga skonfigurowanego tokenu/SSH)"},
+}
+
+// gitHubConnectModes — tryb połączenia z GitHub remote.
 var gitHubConnectModes = []DeployProviderChoice{
-	{"HTTPS (github.com)", "https", "🔒", "Standardowe połączenie HTTPS (wymaga tokenu/hasła)"},
-	{"SSH (git@github.com)", "ssh", "🔑", "Połączenie SSH (wymaga klucza SSH skonfigurowanego w GitHub)"},
-	{"Pomiń — skonfiguruj ręcznie", "skip", "⏩", "Remote można dodać później: git remote add origin <url>"},
+	{"HTTPS (https://github.com/...)", "https", "🔒", "Standardowe HTTPS (podałeś URL → zostanie ustawiony)"},
+	{"SSH (git@github.com:...)", "ssh", "🔑", "SSH (podałeś URL → zostanie ustawiony)"},
+	{"Pomiń remote — repo tylko lokalne", "skip", "📁", "Bez remote origin; push ręcznie kiedy chcesz"},
 }
 
 var dbProviders = []DeployProviderChoice{
@@ -105,7 +113,11 @@ type WizardModel struct {
 	deployChoice           int
 	dbChoice               int
 	netlifySiteModeChoice  int // 0 = istniejący, 1 = utwórz nowy
-	gitHubConnectChoice    int // 0 = HTTPS, 1 = SSH, 2 = pomiń
+	gitHubCLIChoice        int // 0 = użyj gh, 1 = pomiń gh
+	gitHubConnectChoice    int // 0 = HTTPS, 1 = SSH, 2 = pomiń remote
+
+	// Stan GitHub CLI
+	ghCLIAvailable bool // true gdy `gh` jest w PATH
 
 	// Zebrane dane
 	projectName      string
@@ -154,11 +166,11 @@ func (m *WizardModel) initInputs() {
 	pName.CharLimit = 64
 	pName.Width = 40
 
-	// input[1] = repo
+	// input[1] = repo (pełny URL klonu, np. https://github.com/owner/repo.git)
 	repo := textinput.New()
-	repo.Placeholder = "owner/repo"
-	repo.CharLimit = 128
-	repo.Width = 40
+	repo.Placeholder = "https://github.com/owner/repo.git"
+	repo.CharLimit = 256
+	repo.Width = 52
 
 	// input[2] = netlify token (masked)
 	netlifyToken := textinput.New()
@@ -236,8 +248,14 @@ func (m WizardModel) View() string {
 		return m.viewInput(0, "Nazwa projektu", "Jak nazywa się Twój projekt?",
 			"Będzie wyświetlana w Dashboard i logach wdrożeń.")
 	case wizardStepRepo:
-		return m.viewInput(1, "Repozytorium GitHub", "Podaj repozytorium w formacie owner/repo",
-			"Np. 'mojafirma/moj-projekt'. Używane do releasów.\nMożesz pominąć (zostaw puste) jeśli nie korzystasz z GitHub.")
+		return m.viewInput(1, "URL repozytorium GitHub",
+			"Podaj pełny URL klonu repozytorium (lub pozostaw puste)",
+			"HTTPS: https://github.com/owner/repo.git\n"+
+				"SSH:   git@github.com:owner/repo.git\n\n"+
+				"Jeśli pominiesz, rnr utworzy lokalne repo Git automatycznie.\n"+
+				"Remote możesz dodać później: git remote add origin <url>")
+	case wizardStepGitHubCLI:
+		return m.viewGitHubCLI()
 	case wizardStepGitHubConnect:
 		return m.viewGitHubConnect()
 	case wizardStepProjectType:
@@ -407,66 +425,48 @@ func (m WizardModel) viewProviderChoice(title string, choices []DeployProviderCh
 	return StylePanelAccent.Width(maxW).Render(content)
 }
 
-// viewGitHubConnect renderuje krok wyboru połączenia z GitHub.
-// Pokazuje opcje HTTPS / SSH / Pomiń wraz z podglądem URL który zostanie ustawiony.
-func (m WizardModel) viewGitHubConnect() string {
+// viewGitHubCLI renderuje krok sprawdzenia / konfiguracji GitHub CLI (gh).
+// Sprawdza czy `gh` jest dostępne i pokazuje instrukcję instalacji jeśli nie.
+func (m WizardModel) viewGitHubCLI() string {
 	maxW := min(m.width-4, 72)
 
-	// Oblicz podgląd URL na podstawie repo + wyboru trybu
-	repoSlug := m.repo // "owner/repo"
-	var previewURL string
-	switch m.gitHubConnectChoice {
-	case 0: // HTTPS
-		if repoSlug != "" {
-			previewURL = "https://github.com/" + repoSlug + ".git"
-		} else {
-			previewURL = "https://github.com/<owner>/<repo>.git"
-		}
-	case 1: // SSH
-		if repoSlug != "" {
-			// "owner/repo" → "git@github.com:owner/repo.git"
-			previewURL = "git@github.com:" + repoSlug + ".git"
-		} else {
-			previewURL = "git@github.com:<owner>/<repo>.git"
-		}
-	case 2: // Pomiń
-		previewURL = "(brak remote — skonfiguruj ręcznie po inicializacji)"
+	stepInfo := StyleMuted.Render(fmt.Sprintf("  Krok %d z %d", int(m.step), wizardStepReview))
+	titleStr := StyleTitle.Render("🐙 GitHub CLI (gh)")
+	instruction := lipgloss.NewStyle().Foreground(ColorSubtext).
+		Render("GitHub CLI pozwala `rnr` tworzyć repozytoria i autoryzować push\nbez ręcznego konfigurowania tokenów SSH/HTTPS.")
+
+	// Status gh CLI
+	var ghStatusStr string
+	if m.ghCLIAvailable {
+		ghStatusStr = StyleSuccess.Render("✅  gh CLI wykryty — możesz używać opcji GitHub CLI")
+	} else {
+		ghStatusStr = StyleWarning.Render("⚠  gh CLI nie znaleziono w PATH")
 	}
 
-	stepInfo := StyleMuted.Render(fmt.Sprintf("  Krok %d z %d", int(m.step), wizardStepReview))
-	titleStr := StyleTitle.Render("🔗 Połączenie z GitHub Remote")
-	instruction := lipgloss.NewStyle().Foreground(ColorSubtext).
-		Render("Wybierz sposób połączenia z repozytorium GitHub:")
+	// Instrukcja instalacji (pokazuj zawsze jako hint)
+	installStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Italic(true)
+	installHint := installStyle.Render(
+		"Instalacja gh CLI:\n" +
+			"  Linux:  sudo apt install gh\n" +
+			"  macOS:  brew install gh\n" +
+			"  Windows: winget install --id GitHub.cli\n" +
+			"  Więcej: https://cli.github.com/\n\n" +
+			"Po instalacji: gh auth login")
 
+	// Lista wyboru
 	var items strings.Builder
-	for i, choice := range gitHubConnectModes {
+	for i, choice := range gitHubCLIModes {
 		var row string
-		if i == m.gitHubConnectChoice {
+		if i == m.gitHubCLIChoice {
 			row = lipgloss.NewStyle().
-				Foreground(ColorPrimary).
-				Bold(true).
-				Render(fmt.Sprintf("  ▶ %s %-20s — %s", choice.Emoji, choice.Label, choice.Desc))
+				Foreground(ColorPrimary).Bold(true).
+				Render(fmt.Sprintf("  ▶ %s %-28s — %s", choice.Emoji, choice.Label, choice.Desc))
 		} else {
 			row = lipgloss.NewStyle().
 				Foreground(ColorSubtext).
-				Render(fmt.Sprintf("    %s %-20s — %s", choice.Emoji, choice.Label, choice.Desc))
+				Render(fmt.Sprintf("    %s %-28s — %s", choice.Emoji, choice.Label, choice.Desc))
 		}
 		items.WriteString(row + "\n")
-	}
-
-	// Podgląd URL
-	previewStyle := lipgloss.NewStyle().Foreground(ColorInfo).Italic(true)
-	previewLine := ""
-	if m.gitHubConnectChoice < 2 {
-		previewLine = "\n  " + StyleLabel.Render("Ustawi:") + "  " + previewStyle.Render(previewURL)
-	} else {
-		previewLine = "\n  " + StyleMuted.Render(previewURL)
-	}
-
-	// Ostrzeżenie gdy brak repo
-	var warnStr string
-	if repoSlug == "" && m.gitHubConnectChoice < 2 {
-		warnStr = "\n  " + StyleWarning.Render("⚠  Nie podałeś repo (owner/repo) — cofnij i uzupełnij,\n     lub wybierz 'Pomiń' i skonfiguruj remote ręcznie.")
 	}
 
 	navHint := StyleMuted.Render("\n  ↑↓ = nawigacja • ENTER = wybierz • ESC = cofnij")
@@ -475,12 +475,84 @@ func (m WizardModel) viewGitHubConnect() string {
 		stepInfo, "",
 		titleStr, "",
 		instruction, "",
+		ghStatusStr, "",
+		installHint, "",
 		items.String(),
-		previewLine,
+		navHint,
+	)
+	return StylePanelAccent.Width(maxW).Render(content)
+}
+
+// viewGitHubConnect renderuje krok potwierdzenia URL remote i sposobu połączenia.
+// URL jest już znany (podany w wizardStepRepo) — ten krok tylko potwierdza.
+func (m WizardModel) viewGitHubConnect() string {
+	maxW := min(m.width-4, 72)
+
+	repoURL := strings.TrimSpace(m.inputs[1].Value())
+	stepInfo := StyleMuted.Render(fmt.Sprintf("  Krok %d z %d", int(m.step), wizardStepReview))
+	titleStr := StyleTitle.Render("🔗 Konfiguracja Git Remote")
+	instruction := lipgloss.NewStyle().Foreground(ColorSubtext).
+		Render("Wybierz jak `rnr` ma skonfigurować remote origin:")
+
+	// Pokaż URL który wpisał użytkownik
+	urlLabel := ""
+	if repoURL != "" {
+		urlLabel = "\n  " + StyleLabel.Render("URL:") + "  " +
+			lipgloss.NewStyle().Foreground(ColorInfo).Italic(true).Render(repoURL)
+	}
+
+	var items strings.Builder
+	for i, choice := range gitHubConnectModes {
+		// Dynamicznie dopasuj opcję do podanego URL
+		label := choice.Label
+		desc := choice.Desc
+		if i == 0 && strings.HasPrefix(repoURL, "https://") {
+			label = "HTTPS ✓ (wykryto w URL)"
+			desc = "Użyj podanego URL jako remote origin"
+		} else if i == 1 && strings.HasPrefix(repoURL, "git@") {
+			label = "SSH ✓ (wykryto w URL)"
+			desc = "Użyj podanego URL jako remote origin"
+		}
+		var row string
+		if i == m.gitHubConnectChoice {
+			row = lipgloss.NewStyle().
+				Foreground(ColorPrimary).Bold(true).
+				Render(fmt.Sprintf("  ▶ %s %-32s — %s", choice.Emoji, label, desc))
+		} else {
+			row = lipgloss.NewStyle().Foreground(ColorSubtext).
+				Render(fmt.Sprintf("    %s %-32s — %s", choice.Emoji, label, desc))
+		}
+		items.WriteString(row + "\n")
+	}
+
+	// Ostrzeżenie gdy brak URL a wybrano HTTPS/SSH
+	var warnStr string
+	if repoURL == "" && m.gitHubConnectChoice < 2 {
+		warnStr = "\n  " + StyleWarning.Render(
+			"⚠  Nie podałeś URL repo — cofnij i uzupełnij,\n"+
+				"   lub wybierz 'Pomiń remote' i skonfiguruj ręcznie.")
+	}
+
+	// Podpowiedź dla gh CLI
+	ghHint := ""
+	if m.gitHubCLIChoice == 0 && m.ghCLIAvailable {
+		ghHint = "\n  " + StyleSuccess.Render("🐙 gh CLI dostępny — repo zostanie zautomatycznie zsynchronizowane")
+	} else if m.gitHubCLIChoice == 0 && !m.ghCLIAvailable {
+		ghHint = "\n  " + StyleWarning.Render("⚠  gh CLI niedostępny — instalacja pominięta, używam git")
+	}
+
+	navHint := StyleMuted.Render("\n  ↑↓ = nawigacja • ENTER = wybierz • ESC = cofnij")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		stepInfo, "",
+		titleStr, "",
+		instruction,
+		urlLabel, "",
+		items.String(),
+		ghHint,
 		warnStr,
 		navHint,
 	)
-
 	return StylePanelAccent.Width(maxW).Render(content)
 }
 
@@ -527,9 +599,14 @@ func (m WizardModel) viewReview() string {
 		projectTypeName = "custom"
 	}
 
+	// Określ label dla repo
+	repoLabel := m.repo
+	if repoLabel == "" {
+		repoLabel = "(brak — repo lokalne)"
+	}
+
 	rows := []string{
 		row("Projekt", m.projectName),
-		row("Repozytorium", m.repo),
 		row("Typ projektu", projectTypeName),
 		row("Dostawca deploy", deployProv),
 	}
@@ -540,9 +617,15 @@ func (m WizardModel) viewReview() string {
 		rows = append(rows, row("Dostawca bazy", dbProv))
 	}
 	if m.gitHubRemoteURL != "" {
-		rows = append(rows, row("GitHub remote", m.gitHubRemoteURL))
+		rows = append(rows, row("Clone URL (remote)", m.gitHubRemoteURL))
 	} else if m.repo != "" {
-		rows = append(rows, row("GitHub remote", "(pominięty)"))
+		rows = append(rows, row("Clone URL", repoLabel))
+		rows = append(rows, row("Remote origin", "(pominięty — repo tylko lokalne)"))
+	} else {
+		rows = append(rows, row("Remote origin", "(brak — zostanie utworzone repo lokalne)"))
+	}
+	if m.gitHubCLIChoice == 0 && m.ghCLIAvailable {
+		rows = append(rows, row("GitHub CLI (gh)", "✅ dostępny"))
 	}
 
 	summary := lipgloss.JoinVertical(lipgloss.Left, rows...)
@@ -600,23 +683,28 @@ func (m WizardModel) handleKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
 		return m.advance()
 
 	case tea.KeyUp:
-		if m.step == wizardStepProjectType {
+		switch m.step {
+		case wizardStepProjectType:
 			if m.projectTypeChoice > 0 {
 				m.projectTypeChoice--
 			}
-		} else if m.step == wizardStepDeployProvider {
+		case wizardStepDeployProvider:
 			if m.deployChoice > 0 {
 				m.deployChoice--
 			}
-		} else if m.step == wizardStepNetlifySiteMode {
+		case wizardStepNetlifySiteMode:
 			if m.netlifySiteModeChoice > 0 {
 				m.netlifySiteModeChoice--
 			}
-		} else if m.step == wizardStepGitHubConnect {
+		case wizardStepGitHubCLI:
+			if m.gitHubCLIChoice > 0 {
+				m.gitHubCLIChoice--
+			}
+		case wizardStepGitHubConnect:
 			if m.gitHubConnectChoice > 0 {
 				m.gitHubConnectChoice--
 			}
-		} else if m.step == wizardStepDBProvider {
+		case wizardStepDBProvider:
 			if m.dbChoice > 0 {
 				m.dbChoice--
 			}
@@ -624,23 +712,28 @@ func (m WizardModel) handleKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyDown:
-		if m.step == wizardStepProjectType {
+		switch m.step {
+		case wizardStepProjectType:
 			if m.projectTypeChoice < len(projectTypeChoices)-1 {
 				m.projectTypeChoice++
 			}
-		} else if m.step == wizardStepDeployProvider {
+		case wizardStepDeployProvider:
 			if m.deployChoice < len(deployProviders)-1 {
 				m.deployChoice++
 			}
-		} else if m.step == wizardStepNetlifySiteMode {
+		case wizardStepNetlifySiteMode:
 			if m.netlifySiteModeChoice < len(netlifySiteModes)-1 {
 				m.netlifySiteModeChoice++
 			}
-		} else if m.step == wizardStepGitHubConnect {
+		case wizardStepGitHubCLI:
+			if m.gitHubCLIChoice < len(gitHubCLIModes)-1 {
+				m.gitHubCLIChoice++
+			}
+		case wizardStepGitHubConnect:
 			if m.gitHubConnectChoice < len(gitHubConnectModes)-1 {
 				m.gitHubConnectChoice++
 			}
-		} else if m.step == wizardStepDBProvider {
+		case wizardStepDBProvider:
 			if m.dbChoice < len(dbProviders)-1 {
 				m.dbChoice++
 			}
@@ -676,26 +769,35 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 
 	case wizardStepRepo:
 		m.repo = strings.TrimSpace(m.inputs[1].Value())
-		// Pokaż krok GitHub Connect tylko jeśli jest repo
+		// Zawsze idź przez krok GitHub CLI (gdy repo puste = repo lokalne)
+		// Sprawdź dostępność gh CLI
+		m.ghCLIAvailable = isGhCLIAvailable()
+		// Jeśli URL jest HTTPS lub SSH, auto-ustaw indeks w gitHubConnectChoice
+		if strings.HasPrefix(m.repo, "https://") {
+			m.gitHubConnectChoice = 0 // HTTPS
+		} else if strings.HasPrefix(m.repo, "git@") {
+			m.gitHubConnectChoice = 1 // SSH
+		}
 		if m.repo != "" {
-			m.step = wizardStepGitHubConnect
+			// Mamy URL — idź przez gh CLI + connect
+			m.step = wizardStepGitHubCLI
 		} else {
+			// Brak URL → repo lokalne, pomiń GitHub kroki
+			m.gitHubRemoteURL = ""
 			m.step = wizardStepProjectType
 		}
 
+	case wizardStepGitHubCLI:
+		// Zapisz wybór gh CLI, idź do connect
+		m.step = wizardStepGitHubConnect
+
 	case wizardStepGitHubConnect:
-		// Oblicz URL na podstawie repo i wyboru trybu
-		repoSlug := m.repo
+		// Użyj URL podanego przez użytkownika bezpośrednio (jest już pełny)
+		repoURL := strings.TrimSpace(m.inputs[1].Value())
 		switch m.gitHubConnectChoice {
-		case 0: // HTTPS
-			if repoSlug != "" {
-				m.gitHubRemoteURL = "https://github.com/" + repoSlug + ".git"
-			}
-		case 1: // SSH
-			if repoSlug != "" {
-				m.gitHubRemoteURL = "git@github.com:" + repoSlug + ".git"
-			}
-		case 2: // Pomiń
+		case 0, 1: // HTTPS lub SSH — użyj podanego URL
+			m.gitHubRemoteURL = repoURL
+		case 2: // Pomiń remote
 			m.gitHubRemoteURL = ""
 		}
 		m.step = wizardStepProjectType
@@ -791,6 +893,7 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 				SupabaseURL:      m.supabaseURL,
 				SupabaseKey:      m.supabaseKey,
 				GitHubRemoteURL:  m.gitHubRemoteURL,
+				UseGhCLI:         m.gitHubCLIChoice == 0 && m.ghCLIAvailable,
 			}
 		}
 
@@ -830,6 +933,12 @@ func (m WizardModel) WizardData() (projectName, repo, deployProv, netlifyToken, 
 	return m.projectName, m.repo, m.deployProv,
 		m.netlifyToken, m.netlifySiteID, m.netlifyCreateNew,
 		m.dbProv, m.supabaseRef, m.supabaseURL, m.supabaseKey
+}
+
+// isGhCLIAvailable sprawdza czy GitHub CLI (gh) jest dostępne w PATH.
+func isGhCLIAvailable() bool {
+	_, err := exec.LookPath("gh")
+	return err == nil
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────

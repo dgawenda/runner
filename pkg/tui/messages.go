@@ -196,10 +196,13 @@ type WizardCompleteMsg struct {
 	SupabaseRef      string
 	SupabaseURL      string
 	SupabaseKey      string
-	// GitHubRemoteURL — URL zdalnego repozytorium (opcjonalne).
+	// GitHubRemoteURL — pełny URL klonu repozytorium (opcjonalne).
 	// Jeśli niepuste, rnr wywoła git remote add/set-url origin <url> podczas init.
 	// Format: "https://github.com/owner/repo.git" lub "git@github.com:owner/repo.git"
 	GitHubRemoteURL string
+	// UseGhCLI — true gdy użytkownik wybrał GitHub CLI (gh) w wizardzie.
+	// Loguje informację o użyciu gh i wskazówki do `gh repo create`.
+	UseGhCLI bool
 }
 
 // OutputLineMsg — linia wyjścia do podglądu logów w deploy/rollback.
@@ -273,7 +276,25 @@ type GitDiffLoadedMsg struct {
 type GitPushRequestMsg struct{}
 
 // GitPushDoneMsg — wynik operacji git push.
+// IsNonFastForward=true gdy push odrzucony bo remote jest do przodu (ktoś inny pushował).
 type GitPushDoneMsg struct {
+	Branch           string
+	Err              error
+	IsNonFastForward bool // true = remote jest ahead → zaproponuj pull+rebase lub force
+}
+
+// GitPullRebasePushRequestMsg — żądanie git pull --rebase + push (po non-fast-forward).
+type GitPullRebasePushRequestMsg struct {
+	Branch string
+}
+
+// GitPullRebasePushDoneMsg — wynik operacji pull --rebase + push.
+type GitPullRebasePushDoneMsg struct {
 	Branch string
 	Err    error
+}
+
+// GitForcePushRequestMsg — żądanie git push --force-with-lease (gdy użytkownik świadomie chce).
+type GitForcePushRequestMsg struct {
+	Branch string
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -293,6 +294,21 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var gpCmd tea.Cmd
 		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
 		cmds = append(cmds, gpCmd)
+
+	case GitPullRebasePushRequestMsg:
+		// Żądanie pull+rebase+push po non-fast-forward
+		cmds = append(cmds, m.cmdGitPullRebasePush(msg.Branch))
+
+	case GitPullRebasePushDoneMsg:
+		// Wynik pull+rebase+push → przekaż do gitPanel + odśwież status
+		var gpCmd tea.Cmd
+		m.gitPanel, gpCmd = m.gitPanel.Update(msg)
+		cmds = append(cmds, gpCmd)
+		cmds = append(cmds, m.cmdAuditGitSilent(), m.cmdGitLoadHistory())
+
+	case GitForcePushRequestMsg:
+		// Żądanie force-with-lease push
+		cmds = append(cmds, m.cmdGitForcePushWithLease(msg.Branch))
 
 	case GitCommitDoneMsg:
 		// Wynik commit → przekaż do gitPanel + odśwież git status + historię
@@ -950,6 +966,24 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 			w.ProjectName, w.DeployProv, w.DBProv)
 		logInit("══════════════════════════════════════════════════════")
 
+		// ── Krok 0: Inicjalizacja Git (jeśli brak repo) ───────────────────────
+		// Gdy katalog nie jest repo Git — tworzymy lokalne repo automatycznie.
+		// Działa out-of-the-box: nie wymaga żadnej akcji od użytkownika.
+		if !gitops.HasGitRepo(root) {
+			logInit("Git: katalog nie jest repo — wywołuję `git init`...")
+			if err := gitops.InitRepo(root); err != nil {
+				logInitErr("Git init: błąd: %v", err)
+				// Niekrytyczne — kontynuuj inicjalizację
+			} else {
+				logInitOK("Git init: zainicjalizowano repo w %s", root)
+				// Ustaw user.email i user.name jeśli nie są skonfigurowane globalnie
+				// (niezbędne dla pierwszego commita)
+				gitops.EnsureGitIdentity(root)
+			}
+		} else {
+			logInit("Git: repozytorium już istnieje")
+		}
+
 		// ── Krok 1: rnr.yaml (generuj tylko jeśli nie istnieje) ──────────────
 		pipelinePath := filepath.Join(root, config.PipelineFile)
 		if _, err := os.Stat(pipelinePath); os.IsNotExist(err) {
@@ -1042,13 +1076,31 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 		_ = config.EnsureGitignore(root)
 
 		// ── Krok 4: GitHub remote (git remote add/set-url origin <url>) ───────
-		// Jeśli użytkownik wybrał HTTPS lub SSH w wizardzie, ustawiamy remote.
+		// Jeśli użytkownik podał URL repo w wizardzie, ustawiamy remote origin.
 		// Operacja niekrytyczna — błąd nie blokuje inicjalizacji.
 		if w.GitHubRemoteURL != "" {
+			logInit("GitHub remote: ustawianie origin → %s", w.GitHubRemoteURL)
 			if err := gitops.SetRemote(root, w.GitHubRemoteURL); err != nil {
 				logInitErr("GitHub remote: nie udało się ustawić: %v", err)
 			} else {
 				logInitOK("GitHub remote: ustawiono origin → %s", w.GitHubRemoteURL)
+			}
+		} else {
+			logInit("GitHub remote: brak URL — repo pozostaje lokalne (bez origin)")
+			logInit("  Aby dodać remote: git remote add origin <URL_REPOZYTORIUM>")
+		}
+
+		// ── GitHub CLI (gh) — tworzenie repo jeśli dostępny ──────────────────
+		// Jeśli `gh` jest dostępny i użytkownik go wybrał, możemy zaoferować
+		// `gh repo create`. W tej wersji tylko logujemy informację — użytkownik
+		// może uruchomić `gh repo create` manualnie po inicjalizacji.
+		if w.UseGhCLI {
+			if ghPath, ghErr := exec.LookPath("gh"); ghErr == nil {
+				logInitOK("gh CLI: wykryto w %s — możesz teraz: gh repo create", ghPath)
+				logInit("  Przykład: gh repo create %s --private --source=.", w.ProjectName)
+			} else {
+				logInit("gh CLI: nie znaleziono w PATH (pominięty)")
+				logInit("  Instalacja: https://cli.github.com/")
 			}
 		}
 
@@ -1382,15 +1434,71 @@ func (m *RootModel) cmdGitStageAndCommit(message string, files []string) tea.Cmd
 }
 
 // cmdGitPush wypycha bieżącą gałąź do origin (z --set-upstream przy pierwszym razie).
+// Wykrywa błąd non-fast-forward i ustawia IsNonFastForward=true w odpowiedzi.
 func (m *RootModel) cmdGitPush() tea.Cmd {
 	root := m.projectRoot
 	return func() tea.Msg {
+		// Sprawdź czy jest skonfigurowany remote
+		if !gitops.HasRemote(root) {
+			return GitPushDoneMsg{
+				Err: fmt.Errorf(
+					"brak remote 'origin'\n\n" +
+						"Dodaj remote:\n  git remote add origin <URL_REPO>\n\n" +
+						"Lub w wizardzie setup: rnr init"),
+			}
+		}
 		branch, err := gitops.GetCurrentBranch(root)
 		if err != nil {
 			return GitPushDoneMsg{Err: fmt.Errorf("nie można odczytać gałęzi: %w", err)}
 		}
 		_, pushErr := gitops.PushCurrentBranch(root)
-		return GitPushDoneMsg{Branch: branch, Err: pushErr}
+		if pushErr != nil {
+			return GitPushDoneMsg{
+				Branch:           branch,
+				Err:              pushErr,
+				IsNonFastForward: gitops.IsNonFastForward(pushErr),
+			}
+		}
+		return GitPushDoneMsg{Branch: branch}
+	}
+}
+
+// cmdGitPullRebasePush wykonuje git pull --rebase, a następnie git push.
+// Używane po odrzuceniu push z powodu non-fast-forward.
+func (m *RootModel) cmdGitPullRebasePush(branch string) tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		// Krok 1: pull --rebase
+		if _, err := gitops.PullRebase(root, "origin", branch); err != nil {
+			return GitPullRebasePushDoneMsg{
+				Branch: branch,
+				Err:    fmt.Errorf("git pull --rebase nieudany: %w\n\nRozwiąż konflikty ręcznie i spróbuj ponownie", err),
+			}
+		}
+		// Krok 2: push po rebase
+		if _, err := gitops.PushCurrentBranch(root); err != nil {
+			return GitPullRebasePushDoneMsg{
+				Branch: branch,
+				Err:    fmt.Errorf("push po rebase nieudany: %w", err),
+			}
+		}
+		return GitPullRebasePushDoneMsg{Branch: branch}
+	}
+}
+
+// cmdGitForcePushWithLease wykonuje git push --force-with-lease.
+// Bezpieczniejszy od --force — odrzuca jeśli remote zmienił się od fetch.
+func (m *RootModel) cmdGitForcePushWithLease(branch string) tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		if _, err := gitops.PushForceWithLease(root, "origin", branch); err != nil {
+			return GitPushDoneMsg{
+				Branch:           branch,
+				Err:              err,
+				IsNonFastForward: gitops.IsNonFastForward(err),
+			}
+		}
+		return GitPushDoneMsg{Branch: branch}
 	}
 }
 

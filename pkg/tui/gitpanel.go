@@ -96,6 +96,10 @@ type GitPanelModel struct {
 	lastCommitHash string // Hash ostatniego commita (pokazuje opcję push)
 	pushAvailable  bool   // True gdy jest remote + można pushować
 
+	// Stan konfliktu push (non-fast-forward)
+	pushConflict       bool   // True gdy remote jest ahead — pokazuje opcje
+	pushConflictBranch string // Gałąź której dotyczy konflikt
+
 	// [2] Branches tab
 	selectedBranch int
 
@@ -218,16 +222,50 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 	case GitPushDoneMsg:
 		m.loading = false
 		if msg.Err != nil {
-			m.statusMsg = "✗ Push nieudany: " + msg.Err.Error()
-			m.statusErr = true
+			if msg.IsNonFastForward {
+				// Remote jest do przodu — pokaż opcje zamiast zwykłego błędu
+				m.pushConflict = true
+				m.pushConflictBranch = msg.Branch
+				m.statusMsg = "⚠  Push odrzucony — remote ma nowe commity"
+				m.statusErr = true
+			} else {
+				m.pushConflict = false
+				m.statusMsg = "✗ Push nieudany: " + msg.Err.Error()
+				m.statusErr = true
+			}
 		} else {
+			m.pushConflict = false
 			m.statusMsg = fmt.Sprintf("✓ Wypchnięto gałąź %s → origin", msg.Branch)
 			m.statusErr = false
 			m.lastCommitHash = "" // Wyczyść po push
 		}
 
+	case GitPullRebasePushDoneMsg:
+		m.loading = false
+		m.pushConflict = false
+		if msg.Err != nil {
+			m.statusMsg = "✗ Pull+rebase+push nieudany: " + msg.Err.Error()
+			m.statusErr = true
+		} else {
+			m.statusMsg = fmt.Sprintf("✓ Pull+rebase+push: gałąź %s zsynchronizowana z origin", msg.Branch)
+			m.statusErr = false
+			m.lastCommitHash = ""
+		}
+
 	// ── Klawiatura ────────────────────────────────────────────────────
 	case tea.KeyMsg:
+
+		// ── Tryb konfliktu push — obsługa ESC ─────────────────────────
+		if m.tab == GitTabStatus && m.pushConflict {
+			switch msg.String() {
+			case "esc", "q":
+				m.pushConflict = false
+				m.statusMsg = "Push anulowany"
+				m.statusErr = false
+			}
+			// Klawisze u/f/U/F obsługiwane niżej (ogólna obsługa)
+			// Nie blokujemy dalszego przetwarzania — let fall through
+		}
 
 		// ── Tryb podglądu diff (Status tab) — osobna obsługa ─────────
 		if m.tab == GitTabStatus && m.showDiff {
@@ -400,11 +438,40 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 				m.statusMsg = ""
 			}
 
+		// ── Obsługa konfliktu push (non-fast-forward) ─────────────────
+		// Aktywne gdy m.pushConflict == true
+		case "u", "U":
+			// [U] pull --rebase + push (zalecane)
+			if m.tab == GitTabStatus && m.pushConflict && !m.loading {
+				branch := m.pushConflictBranch
+				m.loading = true
+				m.pushConflict = false
+				m.statusMsg = "↓ git pull --rebase + push..."
+				m.statusErr = false
+				return m, func() tea.Msg {
+					return GitPullRebasePushRequestMsg{Branch: branch}
+				}
+			}
+
+		case "f", "F":
+			// [F] force-with-lease (nadpisuje remote — tylko gdy świadomy wybór)
+			if m.tab == GitTabStatus && m.pushConflict && !m.loading {
+				branch := m.pushConflictBranch
+				m.loading = true
+				m.pushConflict = false
+				m.statusMsg = "⚡ git push --force-with-lease..."
+				m.statusErr = false
+				return m, func() tea.Msg {
+					return GitForcePushRequestMsg{Branch: branch}
+				}
+			}
+
 		// ── 'p' — push bieżącej gałęzi ───────────────────────────────
 		case "p", "P":
 			if m.tab == GitTabStatus && !m.loading {
 				m.loading = true
 				m.statusMsg = ""
+				m.pushConflict = false
 				return m, func() tea.Msg {
 					return GitPushRequestMsg{}
 				}
@@ -594,7 +661,30 @@ func (m GitPanelModel) renderStatusTab(width int) string {
 		return m.renderDiffView(width)
 	}
 
+	// ── Tryb konfliktu push (non-fast-forward) ─────────────────────
+	if m.pushConflict {
+		return m.renderPushConflict(width)
+	}
+
 	var lines []string
+
+	// Wiersz statusu remote
+	if m.gitStatus.HasRemote {
+		remoteShort := m.gitStatus.RemoteURL
+		if len(remoteShort) > 50 {
+			remoteShort = "…" + remoteShort[len(remoteShort)-47:]
+		}
+		lines = append(lines,
+			"  "+StyleMuted.Render("🔗 remote: "+remoteShort),
+			"",
+		)
+	} else {
+		lines = append(lines,
+			"  "+StyleWarning.Render("⚠  Brak remote origin — push niedostępny"),
+			"  "+StyleMuted.Render("   Dodaj: git remote add origin <URL>"),
+			"",
+		)
+	}
 
 	if m.gitStatus.IsClean {
 		lines = append(lines,
@@ -612,8 +702,8 @@ func (m GitPanelModel) renderStatusTab(width int) string {
 				"  "+StyleMuted.Render("  autor: "+m.gitStatus.LastCommit.Author),
 			)
 		}
-		// Pokaż opcję push jeśli jest ostatni commit
-		if !m.loading {
+		// Pokaż opcję push jeśli jest remote i ostatni commit
+		if !m.loading && m.gitStatus.HasRemote {
 			lines = append(lines, "", "  "+StyleMuted.Render("[p] Push do remote"))
 		}
 	} else {
@@ -885,6 +975,46 @@ func (m GitPanelModel) renderGraphTab(width int) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// renderPushConflict renderuje ekran wyboru akcji po odrzuceniu push (non-fast-forward).
+// Pojawia się gdy remote branch jest do przodu względem lokalnej gałęzi.
+func (m GitPanelModel) renderPushConflict(width int) string {
+	var lines []string
+
+	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).Bold(true)
+	infoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#8BE9FD"))
+	optStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2"))
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
+
+	lines = append(lines,
+		"  "+warnStyle.Render("⚠  Push odrzucony — remote jest do przodu (non-fast-forward)"),
+		"",
+		"  "+infoStyle.Render("Gałąź: "+m.pushConflictBranch),
+		"",
+		"  "+descStyle.Render("Zdalnie istnieją commity których lokalnie nie masz."),
+		"  "+descStyle.Render("Dzieje się tak gdy ktoś inny wypchnął zmiany w między czasie."),
+		"",
+		"  Wybierz akcję:",
+		"",
+		"  "+keyStyle.Render("[U]")+" "+optStyle.Render("  pull --rebase + push")+" "+
+			descStyle.Render("— (ZALECANE) pobierz zmiany, nałóż swoje na wierzchu i wypchnij"),
+		"",
+		"  "+keyStyle.Render("[F]")+" "+optStyle.Render("  force-with-lease push")+" "+
+			descStyle.Render("— NADPISUJE remote! Używaj tylko gdy wiesz co robisz"),
+		"",
+		"  "+keyStyle.Render("[ESC]")+" "+descStyle.Render("— anuluj, wróć do Status"),
+		"",
+	)
+
+	// Ostrzeżenie przy force
+	lines = append(lines,
+		"  "+descStyle.Render("💡 --force-with-lease jest bezpieczniejszy od --force:"),
+		"  "+descStyle.Render("   odrzuci push jeśli ktoś wypchnął nowe commity od Twojego fetch."),
+	)
+
+	return strings.Join(lines, "\n") + "\n"
+}
+
 // ─── Pasek statusu i klawiszy ─────────────────────────────────────────────
 
 func (m GitPanelModel) renderStatusBar() string {
@@ -903,7 +1033,14 @@ func (m GitPanelModel) renderKeyBindings(width int) string {
 
 	switch m.tab {
 	case GitTabStatus:
-		if m.showDiff {
+		if m.pushConflict {
+			// Tryb rozwiązywania konfliktu push
+			bindings = append(bindings,
+				keyBind("U", "pull+rebase+push"),
+				keyBind("F", "force-with-lease"),
+				keyBind("ESC", "Anuluj"),
+			)
+		} else if m.showDiff {
 			bindings = append(bindings,
 				keyBind("ESC / d", "Zamknij diff"),
 				keyBind("↑↓", "Przewijaj"),

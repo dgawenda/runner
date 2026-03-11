@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/neution/rnr/pkg/config"
+	"github.com/neution/rnr/pkg/gitops"
 	"github.com/neution/rnr/pkg/logger"
 	"gopkg.in/yaml.v3"
 )
@@ -126,28 +127,42 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	}
 
 	// ── Opis wdrożenia (widoczny w panelu Netlify i historii deployów) ────
-	// Format: "rnr • <środowisko> • <gałąź> • <projekt> • <data>"
+	// Format: "rnr • <projekt> • <środowisko> • <gałąź> • <autor@email> • <data>"
+	// Autor = committer z git log (kto wypchnął te commity).
 	// Dodawany jako --message do CLI Netlify — wyświetlany w Deploy Details.
-	deployMessage := fmt.Sprintf("rnr • %s • branch:%s • %s • %s",
-		func() string {
-			if env.Name != "" {
-				return env.Name
-			}
-			if d.NetlifyProd {
-				return "production"
-			}
-			return "preview"
-		}(),
-		func() string {
-			if env.Branch != "" {
-				return env.Branch
-			}
-			return "unknown"
-		}(),
+	envLabel := env.Name
+	if envLabel == "" {
+		if d.NetlifyProd {
+			envLabel = "production"
+		} else {
+			envLabel = "preview"
+		}
+	}
+	branchLabel := env.Branch
+	if branchLabel == "" {
+		branchLabel = "unknown"
+	}
+
+	// Pobierz informacje o autorze ostatniego commita (kto deployuje)
+	gitName, gitEmail := gitops.GetGitUser(p.projectRoot)
+	authorLabel := ""
+	if gitName != "" && gitEmail != "" {
+		authorLabel = fmt.Sprintf(" • %s <%s>", gitName, gitEmail)
+	} else if gitName != "" {
+		authorLabel = " • " + gitName
+	} else if gitEmail != "" {
+		authorLabel = " • " + gitEmail
+	}
+
+	deployMessage := fmt.Sprintf("rnr • %s • %s • branch:%s%s • %s",
 		env.ProjectName,
-		time.Now().Format("2006-01-02 15:04"),
+		envLabel,
+		branchLabel,
+		authorLabel,
+		time.Now().Format("2006-01-02 15:04 MST"),
 	)
 	args = append(args, "--message", deployMessage)
+	send(outputCh, fmt.Sprintf("💬 Netlify opis: %s", deployMessage))
 
 	// Przekaż zmienne środowiskowe do Netlify CLI jako flagi --env KEY=VALUE.
 	// Kolejność priorytetu: env.Env (rnr.yaml) > .env plik > token Netlify

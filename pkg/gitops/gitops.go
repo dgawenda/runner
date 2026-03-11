@@ -57,6 +57,10 @@ type StatusResult struct {
 	// IsGitRepo — true jeśli katalog jest repozytorium Git.
 	// Projekty bez Git (plain HTML) mają IsGitRepo=false — nie blokują wdrożenia.
 	IsGitRepo bool
+	// HasRemote — true jeśli repozytorium ma skonfigurowany remote "origin".
+	HasRemote bool
+	// RemoteURL — URL remote "origin" (puste jeśli brak).
+	RemoteURL string
 	// DirtyFiles — lista brudnych plików jeśli repozytorium nie jest czyste.
 	DirtyFiles []DirtyFile
 	// Branch — aktualna gałąź.
@@ -95,9 +99,14 @@ func AuditRepo(workdir string) (*StatusResult, error) {
 		commit = &CommitInfo{Message: "(brak commitów)"}
 	}
 
+	// Pobierz informacje o remote "origin"
+	remoteURL := GetRemoteURL(workdir)
+
 	return &StatusResult{
 		IsClean:    len(dirty) == 0,
 		IsGitRepo:  true,
+		HasRemote:  remoteURL != "",
+		RemoteURL:  remoteURL,
 		DirtyFiles: dirty,
 		Branch:     branch,
 		LastCommit: *commit,
@@ -546,6 +555,125 @@ func EnsureBranch(workdir, branch string) (created bool, err error) {
 		return false, fmt.Errorf("nie można utworzyć gałęzi '%s': %w", branch, createErr)
 	}
 	return true, nil
+}
+
+// ─── Użytkownik Git ───────────────────────────────────────────────────────
+
+// GetGitUser zwraca skonfigurowaną tożsamość użytkownika git.
+// Czyta git config user.name i user.email z kontekstu podanego katalogu.
+// Oba pola mogą być puste jeśli git nie jest skonfigurowany.
+func GetGitUser(workdir string) (name, email string) {
+	n, _ := runGit(workdir, "config", "user.name")
+	e, _ := runGit(workdir, "config", "user.email")
+	return strings.TrimSpace(n), strings.TrimSpace(e)
+}
+
+// ─── Inicjalizacja Repozytorium ───────────────────────────────────────────
+
+// InitRepo inicjalizuje nowe repozytorium Git w podanym katalogu.
+// Jeśli katalog jest już repo Git, nic nie robi (git init jest idempotentny).
+func InitRepo(workdir string) error {
+	_, err := runGit(workdir, "init")
+	return err
+}
+
+// HasGitRepo sprawdza czy podany katalog jest repozytorium Git.
+// Sprawdza obecność podkatalogu .git lub zmiennej GIT_DIR.
+func HasGitRepo(workdir string) bool {
+	_, err := GetCurrentBranch(workdir)
+	return err == nil
+}
+
+// EnsureGitIdentity ustawia tymczasowe user.name i user.email jeśli nie są skonfigurowane.
+// Wymagane dla pierwszego commita gdy użytkownik nie ma globalnego git config.
+// Wartości są ustawiane LOKALNIE w projekcie (nie globalnie) i można je nadpisać.
+func EnsureGitIdentity(workdir string) {
+	// Sprawdź czy user.name jest skonfigurowany
+	name, _ := runGit(workdir, "config", "user.name")
+	if strings.TrimSpace(name) == "" {
+		// Użyj nazwy projektu jako fallback
+		_, _ = runGit(workdir, "config", "--local", "user.name", "rnr-user")
+	}
+	email, _ := runGit(workdir, "config", "user.email")
+	if strings.TrimSpace(email) == "" {
+		_, _ = runGit(workdir, "config", "--local", "user.email", "rnr@local")
+	}
+}
+
+// HasRemote sprawdza czy repozytorium ma skonfigurowany remote "origin".
+func HasRemote(workdir string) bool {
+	out, err := runGit(workdir, "remote", "get-url", "origin")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != ""
+}
+
+// GetRemoteURL zwraca URL remote "origin" (lub innego jeśli podano nazwę).
+// Zwraca pusty string jeśli remote nie istnieje lub katalog nie jest repo.
+func GetRemoteURL(workdir string) string {
+	out, err := runGit(workdir, "remote", "get-url", "origin")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// ─── Push zaawansowany ────────────────────────────────────────────────────
+
+// IsNonFastForward sprawdza czy błąd push wynika z non-fast-forward
+// (remote ma commity których lokalnie nie ma — ktoś inny wypchnął w między czasie).
+func IsNonFastForward(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "non-fast-forward") ||
+		strings.Contains(s, "[rejected]") ||
+		strings.Contains(s, "fetch first") ||
+		strings.Contains(s, "Updates were rejected")
+}
+
+// PullRebase wykonuje git pull --rebase dla podanej gałęzi.
+// Jest bezpieczną alternatywą dla merge przy synchronizacji z remote.
+// Po pomyślnym pull można wywołać PushCurrentBranch.
+func PullRebase(workdir, remote, branch string) (string, error) {
+	if remote == "" {
+		remote = "origin"
+	}
+	out, err := runGit(workdir, "pull", "--rebase", remote, branch)
+	return out, err
+}
+
+// PushForceWithLease wykonuje git push --force-with-lease.
+// Jest bezpieczniejszą wersją --force — odrzuca push jeśli remote zmienił się
+// od czasu ostatniego fetch (chroni przed nadpisaniem cudzych commitów).
+func PushForceWithLease(workdir, remote, branch string) (string, error) {
+	if remote == "" {
+		remote = "origin"
+	}
+	out, err := runGit(workdir, "push", "--force-with-lease", remote, branch)
+	return out, err
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+// CloneURLToSlug wyciąga "owner/repo" z pełnego URL klonu GitHub.
+// Obsługuje HTTPS (https://github.com/owner/repo.git) i SSH (git@github.com:owner/repo.git).
+// Zwraca pusty string jeśli URL nie pasuje do żadnego wzorca.
+func CloneURLToSlug(url string) string {
+	url = strings.TrimSuffix(url, ".git")
+	url = strings.TrimSuffix(url, "/")
+
+	// HTTPS: https://github.com/owner/repo
+	if idx := strings.Index(url, "github.com/"); idx >= 0 {
+		return url[idx+len("github.com/"):]
+	}
+	// SSH: git@github.com:owner/repo
+	if idx := strings.Index(url, "github.com:"); idx >= 0 {
+		return url[idx+len("github.com:"):]
+	}
+	return ""
 }
 
 // ─── Wewnętrzne ───────────────────────────────────────────────────────────
