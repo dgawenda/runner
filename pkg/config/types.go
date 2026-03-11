@@ -345,6 +345,10 @@ type DatabaseConfig struct {
 // Environment to scalone środowisko (spec z rnr.yaml + sekrety z rnr.conf.yaml).
 // Używane przez cały system po załadowaniu konfiguracji.
 type Environment struct {
+	// Name — klucz środowiska z rnr.yaml (np. "production", "development").
+	// Wypełniane automatycznie przy scalaniu konfiguracji.
+	Name string
+
 	// ProjectName — nazwa projektu z sekcji project.name w rnr.yaml.
 	// Wypełniane automatycznie przy scalaniu konfiguracji.
 	// Używane np. przez Netlify przy tworzeniu nowego projektu.

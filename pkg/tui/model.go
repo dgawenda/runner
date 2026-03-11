@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -1322,15 +1323,25 @@ func (m *RootModel) cmdRunPipeline(envName string, stages []config.Stage, ch cha
 				log.Info("┌─ [%d/%d] %s", i+1, len(stages), stage.Name)
 			}
 
-			// Kanał wyjścia etapu — każda linia trafia do TUI i do pliku logu
-			outputCh := make(chan string, 128)
+			// Kanał wyjścia etapu — każda linia trafia do TUI i do pliku logu.
+			// WaitGroup gwarantuje, że goroutyna zakończy wysyłanie do `ch`
+			// ZANIM zamkniemy `ch` lub wyślemy kolejne zdarzenia — bez tego
+			// grozi "panic: send on closed channel".
+			outputCh := make(chan string, 256)
+			var outputWg sync.WaitGroup
+			outputWg.Add(1)
 			go func(idx int) {
+				defer outputWg.Done()
 				for line := range outputCh {
 					// Zapisz każdą linię wyjścia do pliku logu
 					if log != nil {
 						log.Raw(line)
 					}
-					ch <- pipelineEventMsg{kind: "stage_output", index: idx, line: line}
+					// Wyślij do TUI — jeśli ch jest pełny, nie blokuj
+					select {
+					case ch <- pipelineEventMsg{kind: "stage_output", index: idx, line: line}:
+					default:
+					}
 				}
 			}(i)
 
@@ -1397,6 +1408,7 @@ func (m *RootModel) cmdRunPipeline(envName string, stages []config.Stage, ch cha
 		}
 
 		close(outputCh)
+		outputWg.Wait() // Poczekaj aż goroutyna wyśle wszystkie linie do `ch`
 		durMS := time.Since(startTime).Milliseconds()
 
 			if stageErr != nil {

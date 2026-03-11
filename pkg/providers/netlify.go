@@ -125,6 +125,30 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 		send(outputCh, "🔍 Netlify: wdrożenie podglądu (preview deploy)")
 	}
 
+	// ── Opis wdrożenia (widoczny w panelu Netlify i historii deployów) ────
+	// Format: "rnr • <środowisko> • <gałąź> • <projekt> • <data>"
+	// Dodawany jako --message do CLI Netlify — wyświetlany w Deploy Details.
+	deployMessage := fmt.Sprintf("rnr • %s • branch:%s • %s • %s",
+		func() string {
+			if env.Name != "" {
+				return env.Name
+			}
+			if d.NetlifyProd {
+				return "production"
+			}
+			return "preview"
+		}(),
+		func() string {
+			if env.Branch != "" {
+				return env.Branch
+			}
+			return "unknown"
+		}(),
+		env.ProjectName,
+		time.Now().Format("2006-01-02 15:04"),
+	)
+	args = append(args, "--message", deployMessage)
+
 	// Przekaż zmienne środowiskowe do Netlify CLI jako flagi --env KEY=VALUE.
 	// Kolejność priorytetu: env.Env (rnr.yaml) > .env plik > token Netlify
 	for k, v := range dotEnvVars {
@@ -141,7 +165,7 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 		"NETLIFY_SITE_ID":    d.NetlifySiteID,
 	})
 
-	send(outputCh, fmt.Sprintf("⚙️  netlify deploy --site %s %s",
+	send(outputCh, fmt.Sprintf("⚙️  netlify deploy --site %s %s --message %q",
 		d.NetlifySiteID,
 		func() string {
 			if d.NetlifyProd {
@@ -149,6 +173,7 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 			}
 			return "(preview)"
 		}(),
+		deployMessage,
 	))
 
 	runner := NewRunner(workdir, p.masker, p.log)
