@@ -545,16 +545,28 @@ stages:
 
 // DefaultConfYAMLFromWizard generuje rnr.conf.yaml wypełniony danymi z Setup Wizarda.
 // Generuje obie sekcje środowiskowe: production (pełne dane) + staging (te same tokeny,
-// osobny site ID do uzupełnienia).
+// osobny site ID do uzupełnienia lub automatycznie utworzony).
+//
+// Parametry Netlify są rozdzielone na produkcję i staging:
+//   - netlifyToken       — wspólny token autoryzacji (dla obu środowisk)
+//   - prodSiteID         — Site ID produkcji (pusty = użyj prodCreateNew)
+//   - prodCreateNew      — true = automatycznie utwórz projekt produkcji na Netlify
+//   - stagingSiteID      — Site ID stagingu (pusty = użyj stagingCreateNew)
+//   - stagingCreateNew   — true = automatycznie utwórz projekt stagingu na Netlify
 func DefaultConfYAMLFromWizard(
 	projectName, repo string,
-	deployProv, netlifyToken, netlifySiteID string,
-	netlifyCreateNew bool,
+	deployProv, netlifyToken string,
+	prodSiteID string, prodCreateNew bool,
+	stagingSiteID string, stagingCreateNew bool,
 	dbProv, supabaseRef, supabaseURL, supabaseKey string,
 ) string {
-	netlifyCreateNewStr := "false"
-	if netlifyCreateNew {
-		netlifyCreateNewStr = "true"
+	prodCreateNewStr := "false"
+	if prodCreateNew {
+		prodCreateNewStr = "true"
+	}
+	stagingCreateNewStr := "false"
+	if stagingCreateNew {
+		stagingCreateNewStr = "true"
 	}
 
 	// ── Blok wdrożenia dla PRODUKCJI ──────────────────────────────────────
@@ -565,13 +577,13 @@ func DefaultConfYAMLFromWizard(
 			`netlify_auth_token: "%s"
     netlify_site_id: "%s"
     netlify_create_new: %s`,
-			netlifyToken, netlifySiteID, netlifyCreateNewStr)
-		// Staging: ten sam token, osobny site ID (pusty = utwórz nowy)
+			netlifyToken, prodSiteID, prodCreateNewStr)
+		// Staging: ten sam token, osobny site ID
 		stagingDeployBlock = fmt.Sprintf(
 			`netlify_auth_token: "%s"
-    netlify_site_id: ""        # ← wpisz Site ID dla staging LUB ustaw netlify_create_new: true
+    netlify_site_id: "%s"
     netlify_create_new: %s`,
-			netlifyToken, netlifyCreateNewStr)
+			netlifyToken, stagingSiteID, stagingCreateNewStr)
 	} else if deployProv == ProviderVercel {
 		prodDeployBlock = fmt.Sprintf(`vercel_token: "%s"`, netlifyToken)
 		stagingDeployBlock = fmt.Sprintf(`vercel_token: "%s"`, netlifyToken)

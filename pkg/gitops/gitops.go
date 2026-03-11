@@ -450,6 +450,47 @@ func GetFileDiff(workdir, file string) ([]string, error) {
 	return []string{"(brak różnic do wyświetlenia dla: " + file + ")"}, nil
 }
 
+// EnsureBranch tworzy gałąź jeśli nie istnieje lokalnie, bez przełączania (git branch <name>).
+//
+// Zwraca (true, nil) jeśli gałąź została właśnie UTWORZONA.
+// Zwraca (false, nil) jeśli gałąź już istnieje lub katalog nie jest repo Git.
+// Zwraca (false, err) tylko gdy tworzenie gałęzi nie powiodło się.
+//
+// Używane automatycznie podczas konfiguracji projektu (Setup Wizard),
+// aby środowiska (production → master, staging → develop) miały gotowe gałęzie.
+func EnsureBranch(workdir, branch string) (created bool, err error) {
+	// Sprawdź czy katalog jest repozytorium Git
+	current, err := GetCurrentBranch(workdir)
+	if err != nil {
+		return false, nil // Nie jest repo Git — pomiń cicho
+	}
+
+	// Jeśli już jesteśmy na tej gałęzi, istnieje
+	if current == branch {
+		return false, nil
+	}
+
+	// Sprawdź czy gałąź istnieje lokalnie
+	exists, _ := BranchExists(workdir, branch)
+	if exists {
+		return false, nil
+	}
+
+	// Sprawdź czy są jakiekolwiek commity (bez commitów git branch nie zadziała)
+	_, commitErr := runGit(workdir, "rev-parse", "HEAD")
+	if commitErr != nil {
+		// Brak commitów w repo — gałąź zostanie utworzona automatycznie przy pierwszym commit
+		return false, nil
+	}
+
+	// Utwórz gałąź bez przełączania (git branch <name>)
+	_, createErr := runGit(workdir, "branch", branch)
+	if createErr != nil {
+		return false, fmt.Errorf("nie można utworzyć gałęzi '%s': %w", branch, createErr)
+	}
+	return true, nil
+}
+
 // ─── Wewnętrzne ───────────────────────────────────────────────────────────
 
 // runGit wykonuje komendę git w podanym katalogu i zwraca stdout.

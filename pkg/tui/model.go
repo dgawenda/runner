@@ -303,7 +303,12 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// ── Wizard ────────────────────────────────────────────────────────
 	case WizardCompleteMsg:
-		cmds = append(cmds, m.cmdGenerateConfigs(msg))
+		// Pokaż ekran ładowania podczas tworzenia konfiguracji,
+		// projektów Netlify i gałęzi środowiskowych — może to chwilę potrwać.
+		m.loading = true
+		m.screen = ScreenLoading
+		m.loadMsg = "Inicjalizuję projekt — tworzę konfigurację..."
+		cmds = append(cmds, m.cmdGenerateConfigs(msg), m.spinner.Tick)
 
 	// ── Nawigacja ─────────────────────────────────────────────────────
 	case NavigateMsg:
@@ -701,13 +706,14 @@ func (m *RootModel) cmdLoadState() tea.Cmd {
 }
 
 func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
+	root := m.projectRoot
 	return func() tea.Msg {
-		if err := config.EnsureRnrDir(m.projectRoot); err != nil {
+		if err := config.EnsureRnrDir(root); err != nil {
 			return ErrorMsg{Title: "Błąd katalogu", Message: err.Error(), Err: err}
 		}
 
-		// rnr.yaml — generuj tylko jeśli nie istnieje (w nowej strukturze: projekt + środowiska + stages)
-		pipelinePath := filepath.Join(m.projectRoot, config.PipelineFile)
+		// ── Krok 1: rnr.yaml (generuj tylko jeśli nie istnieje) ──────────────
+		pipelinePath := filepath.Join(root, config.PipelineFile)
 		if _, err := os.Stat(pipelinePath); os.IsNotExist(err) {
 			projectType := w.ProjectType
 			if projectType == "" {
@@ -722,18 +728,57 @@ func (m *RootModel) cmdGenerateConfigs(w WizardCompleteMsg) tea.Cmd {
 			}
 		}
 
-		// rnr.conf.yaml — TYLKO sekrety (zawsze nadpisz jeśli wizard go generuje)
-		confPath := filepath.Join(m.projectRoot, config.ConfFile)
+		// ── Krok 2: Automatyczne tworzenie projektów Netlify przez REST API ───
+		// Jeśli netlify_create_new: true i token jest podany, zakładamy TERAZ projekty
+		// dla produkcji i stagingu — użytkownik nie musi wychodzić z TUI do Netlify UI.
+		prodSiteID := w.NetlifySiteID // może być pusty (jeśli user wybrał "utwórz nowy")
+		stagingSiteID := ""
+		prodCreateNew := w.NetlifyCreateNew && prodSiteID == ""
+		stagingCreateNew := w.NetlifyCreateNew
+
+		if w.DeployProv == "netlify" && w.NetlifyCreateNew && w.NetlifyToken != "" {
+			// Projekt produkcyjny (nazwa projektu bez sufiksu)
+			if prodSiteID == "" {
+				id, _, createErr := providers.NetlifyCreateSiteWithLog(w.NetlifyToken, w.ProjectName)
+				if createErr == nil && id != "" {
+					prodSiteID = id
+					prodCreateNew = false // Sukces — nie potrzeba tworzyć przy deployu
+				}
+				// Błąd niekrytyczny: conf zostanie zapisany z netlify_create_new: true
+				// i projekt zostanie założony przy pierwszym deploy
+			}
+
+			// Projekt stagingowy (sufiks -staging dla rozróżnienia)
+			stagingName := w.ProjectName + "-staging"
+			id, _, createErr := providers.NetlifyCreateSiteWithLog(w.NetlifyToken, stagingName)
+			if createErr == nil && id != "" {
+				stagingSiteID = id
+				stagingCreateNew = false // Sukces — nie potrzeba tworzyć przy deployu
+			}
+		}
+
+		// ── Krok 3: rnr.conf.yaml — sekrety z finalnymi Site ID ──────────────
+		confPath := filepath.Join(root, config.ConfFile)
 		confContent := config.DefaultConfYAMLFromWizard(
 			w.ProjectName, w.Repo,
-			w.DeployProv, w.NetlifyToken, w.NetlifySiteID, w.NetlifyCreateNew,
+			w.DeployProv, w.NetlifyToken,
+			prodSiteID, prodCreateNew,
+			stagingSiteID, stagingCreateNew,
 			w.DBProv, w.SupabaseRef, w.SupabaseURL, w.SupabaseKey,
 		)
 		if err := os.WriteFile(confPath, []byte(confContent), 0o600); err != nil {
 			return ErrorMsg{Title: "Błąd zapisu rnr.conf.yaml", Message: err.Error(), Err: err}
 		}
 
-		_ = config.EnsureGitignore(m.projectRoot)
+		_ = config.EnsureGitignore(root)
+
+		// ── Krok 4: Automatyczne tworzenie gałęzi środowiskowych ─────────────
+		// production → branch "master", staging → branch "develop"
+		// Tworzy gałęzie BEZ przełączania (git branch <name>).
+		// Bezpieczne: brak commitów lub brak repo → pominięte cicho.
+		gitops.EnsureBranch(root, "master")  // gałąź produkcji
+		gitops.EnsureBranch(root, "develop") // gałąź stagingu
+
 		return NavigateMsg{Screen: ScreenDashboard}
 	}
 }

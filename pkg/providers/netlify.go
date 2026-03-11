@@ -318,6 +318,48 @@ func (p *netlifyProvider) saveNetlifySiteID(projectName, siteID string, outputCh
 	return os.Rename(tmpPath, confPath)
 }
 
+// NetlifyCreateSiteWithLog tworzy nowy projekt Netlify przez REST API i zbiera logi.
+//
+// Wyeksportowana wersja createSiteViaAPI — używana podczas Setup Wizarda,
+// aby automatycznie założyć projekty przed pierwszym wdrożeniem.
+//
+// Zwraca:
+//   - siteID — ID nowo utworzonego projektu (np. "abc123-...")
+//   - logLines — linie postępu (informacyjne, do wyświetlenia)
+//   - err — błąd krytyczny (np. nieautoryzowany token, błąd sieci)
+//
+// Przykład użycia:
+//
+//	id, logs, err := NetlifyCreateSiteWithLog(token, "moj-projekt")
+//	id, logs, err := NetlifyCreateSiteWithLog(token, "moj-projekt-staging")
+func NetlifyCreateSiteWithLog(token, projectName string) (siteID string, logLines []string, err error) {
+	if token == "" {
+		return "", nil, fmt.Errorf("netlify_auth_token jest wymagany do automatycznego tworzenia projektu")
+	}
+	if projectName == "" {
+		projectName = "rnr-project"
+	}
+
+	p := &netlifyProvider{}
+	outputCh := make(chan string, 32)
+
+	// Goroutine zbierająca logi z createSiteViaAPI
+	var collected []string
+	collectDone := make(chan struct{})
+	go func() {
+		for msg := range outputCh {
+			collected = append(collected, msg)
+		}
+		close(collectDone)
+	}()
+
+	id, createErr := p.createSiteViaAPI(token, projectName, outputCh)
+	close(outputCh)
+	<-collectDone // poczekaj aż goroutine zbierze wszystkie logi
+
+	return id, collected, createErr
+}
+
 // netlifySlug zamienia nazwę projektu na prawidłowy slug Netlify:
 // tylko małe litery, cyfry i myślniki, max 63 znaki.
 func netlifySlug(name string) string {
