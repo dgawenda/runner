@@ -46,7 +46,8 @@ const (
 	ScreenDashboard                  // Główny Dashboard
 	ScreenConfirm                    // Potwierdzenie wdrożenia (środowiska chronione)
 	ScreenDeploy                     // Ekran wdrożenia z progress bars
-	ScreenGit                        // Git Panel — status, gałęzie, historia, commit
+	ScreenGit                        // GitPanel — status, gałęzie, historia, commit
+	ScreenApollo                     // Apollo — panel wdrożeń z guardami
 	ScreenRollback                   // Ekran wykonywania rollbacku (progress bars)
 	ScreenRollbackPick               // Ekran wyboru wdrożenia do rollbacku (lista)
 	ScreenPromote                    // Ekran promote (migracje DB)
@@ -109,6 +110,7 @@ type RootModel struct {
 	dashboard DashboardModel
 	deploy    DeployModel
 	gitPanel  GitPanelModel
+	apollo    ApolloModel
 
 	// Spinner ładowania
 	spinner spinner.Model
@@ -224,8 +226,8 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case GitRefreshTickMsg:
 		// Zawsze planuj kolejny tick — niezależnie od ekranu
 		cmds = append(cmds, cmdGitPollTick())
-		// Odśwież status tylko na Dashboard lub Git Panel (nie podczas deploy)
-		if m.screen == ScreenDashboard || m.screen == ScreenGit {
+		// Odśwież status tylko na Dashboard, Git Panel lub Apollo (nie podczas deploy)
+		if m.screen == ScreenDashboard || m.screen == ScreenGit || m.screen == ScreenApollo {
 			cmds = append(cmds, m.cmdAuditGitSilent())
 		}
 		// Odśwież graf jeśli jesteśmy w Git Panelu
@@ -252,11 +254,44 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.gitStatus = msg.Result
 				m.dashboard.gitStatus = msg.Result
 				m.gitPanel.gitStatus = msg.Result
+				m.apollo.gitStatus = msg.Result
+				m.apollo.refreshGuards()
 			}
 			// Przekaż też do gitPanel dla natychmiastowego renderowania
 			var gpCmd tea.Cmd
 			m.gitPanel, gpCmd = m.gitPanel.Update(msg)
 			cmds = append(cmds, gpCmd)
+			// Przekaż do Apollo
+			var apCmd tea.Cmd
+			m.apollo, apCmd = m.apollo.Update(msg)
+			cmds = append(cmds, apCmd)
+		}
+
+	// ── Apollo Panel — obsługa żądań ───────────────────────────────────
+	case ApolloDeployRequestMsg:
+		cmds = append(cmds, m.cmdInitDeploy(msg.Env))
+
+	case ApolloRollbackRequestMsg:
+		cmds = append(cmds, m.cmdInitRollback(msg.Env))
+
+	case ApolloPromoteRequestMsg:
+		cmds = append(cmds, m.cmdInitPromote())
+
+	case ApolloCheckoutRequestMsg:
+		// Automatyczne przełączenie gałęzi z Apollo (przed deployem)
+		cmds = append(cmds, m.cmdApolloCheckout(msg.Branch))
+
+	case ApolloCheckoutDoneMsg:
+		// Poinformuj Apollo o wyniku i odśwież status git
+		var apCmd tea.Cmd
+		m.apollo, apCmd = m.apollo.Update(msg)
+		cmds = append(cmds, apCmd, m.cmdAuditGitSilent())
+		if msg.Err != nil {
+			m.apollo.statusMsg = fmt.Sprintf("❌ Nie udało się przełączyć na gałąź '%s': %s", msg.Branch, msg.Err)
+			m.apollo.statusIsErr = true
+		} else {
+			m.apollo.statusMsg = fmt.Sprintf("✓ Przełączono na gałąź '%s'", msg.Branch)
+			m.apollo.statusIsErr = false
 		}
 
 	case StateLoadedMsg:
@@ -267,6 +302,10 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stateData = &state.State{Version: 1, Deployments: []state.DeployRecord{}}
 		}
 		m.dashboard = NewDashboardModel(m.width, m.height, m.cfg, m.gitStatus, m.stateData)
+		// Inicjalizuj Apollo z aktualną konfiguracją (gotowy do użycia gdy użytkownik naciśnie A)
+		if m.cfg != nil {
+			m.apollo = NewApolloModel(m.width, m.height, m.cfg, m.gitStatus, m.stateData)
+		}
 		m.screen = ScreenDashboard
 
 	// ── Git Panel — operacje ───────────────────────────────────────────
@@ -561,6 +600,21 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+
+	case ScreenApollo:
+		// Przekaż zdarzenia do panelu Apollo
+		var cmd tea.Cmd
+		m.apollo, cmd = m.apollo.Update(msg)
+		cmds = append(cmds, cmd)
+		// Zamknięcie panelu: Q lub ESC (tylko gdy nie ma aktywnego potwierdzenia)
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			if !m.apollo.showBranchSwitch {
+				switch keyMsg.String() {
+				case "q", "esc":
+					m.screen = ScreenDashboard
+				}
+			}
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -587,6 +641,8 @@ func (m *RootModel) View() string {
 		return m.logs.View()
 	case ScreenGit:
 		return m.gitPanel.View()
+	case ScreenApollo:
+		return m.apollo.View()
 	case ScreenError:
 		return m.viewError()
 	default:
@@ -865,6 +921,8 @@ func (m *RootModel) handleDashboardKeys(msg tea.KeyMsg) tea.Cmd {
 	case "q", "ctrl+c":
 		return tea.Quit
 	case "d", "D":
+		// Deploy z poziomu Dashboard jest nadal dostępny (dla wygody),
+		// ale zalecamy Apollo (A) dla pełnych zabezpieczeń.
 		if selectedEnv == "" {
 			return nil
 		}
@@ -876,8 +934,11 @@ func (m *RootModel) handleDashboardKeys(msg tea.KeyMsg) tea.Cmd {
 	case "l", "L":
 		return m.cmdOpenLogs()
 	case "g", "G":
-		// Otwórz Git Panel z aktualnymi danymi
+		// Otwórz GitPanel — tryb normalnego developmentu
 		return m.cmdOpenGitPanel()
+	case "a", "A":
+		// Otwórz Apollo — tryb wdrożeń z guardami bezpieczeństwa
+		return m.cmdOpenApollo()
 	}
 	return nil
 }
@@ -1371,6 +1432,7 @@ func (m *RootModel) cmdOpenLogs() tea.Cmd {
 }
 
 // cmdOpenGitPanel otwiera Git Panel i ładuje dane (gałęzie + historia + graf).
+// GitPanel — tryb normalnego developmentu (git status, commit, push, checkout).
 func (m *RootModel) cmdOpenGitPanel() tea.Cmd {
 	m.gitPanel = NewGitPanelModel(m.width, m.height)
 	m.gitPanel.gitStatus = m.gitStatus
@@ -1380,6 +1442,33 @@ func (m *RootModel) cmdOpenGitPanel() tea.Cmd {
 		m.cmdGitLoadHistory(),
 		m.cmdGitLoadGraph(), // Wczytaj wizualny graf commitów
 	)
+}
+
+// cmdOpenApollo otwiera panel wdrożeń Apollo.
+// Apollo — tryb wdrożeń z pełnym systemem strażników bezpieczeństwa.
+// Wymaga gałęzi roboczych (master/develop) i weryfikuje stan repozytorium.
+func (m *RootModel) cmdOpenApollo() tea.Cmd {
+	if m.cfg == nil {
+		return func() tea.Msg {
+			return ErrorMsg{
+				Title:   "Brak konfiguracji",
+				Message: "Uruchom Setup Wizard aby skonfigurować projekt.",
+			}
+		}
+	}
+	m.apollo = NewApolloModel(m.width, m.height, m.cfg, m.gitStatus, m.stateData)
+	m.screen = ScreenApollo
+	return nil
+}
+
+// cmdApolloCheckout przełącza gałąź Git na żądanie Apollo (automatyczne przełączenie).
+// Używane gdy Apollo wykryje, że bieżąca gałąź nie pasuje do wybranego środowiska.
+func (m *RootModel) cmdApolloCheckout(branch string) tea.Cmd {
+	root := m.projectRoot
+	return func() tea.Msg {
+		err := gitops.CheckoutBranch(root, branch)
+		return ApolloCheckoutDoneMsg{Branch: branch, Err: err}
+	}
 }
 
 // cmdAuditGitSilent odświeża status Git bez zmiany ekranu/loadingu.

@@ -136,6 +136,16 @@ func (m DashboardModel) renderHeader(width int) string {
 		left += StyleMuted.Render(" v"+projectVersion)
 	}
 
+	// Wskaźnik trybów — pomoc kontekstowa
+	gitMode := lipgloss.NewStyle().
+		Foreground(ColorBg).Background(ColorSecondary).
+		Padding(0, 1).Bold(true).Render("G GitPanel")
+	apolloMode := lipgloss.NewStyle().
+		Foreground(ColorBg).Background(lipgloss.Color("#FF79C6")).
+		Padding(0, 1).Bold(true).Render("A Apollo")
+	modeLine := gitMode + " " + apolloMode
+	left += "   " + modeLine
+
 	right := StyleMuted.Render(time.Now().Format("02.01.2006 15:04") + "  ⟳ live")
 
 	header := lipgloss.NewStyle().
@@ -318,10 +328,11 @@ func (m DashboardModel) renderKeyBindings(width int) string {
 	var bindings []string
 
 	bindings = append(bindings,
-		keyBind("D", "Wdróż na "+selectedEnv),
+		keyBind("G", "GitPanel 🔧"),
+		keyBind("A", "Apollo 🚀"),
+		keyBind("D", "Wdróż "+selectedEnv),
 		keyBind("R", "Rollback"),
 		keyBind("P", "Promote DB"),
-		keyBind("G", "Git Panel"),
 		keyBind("L", "Logi"),
 		keyBind("↑↓", "Środowisko"),
 		keyBind("Q", "Wyjdź"),

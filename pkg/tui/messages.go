@@ -298,3 +298,46 @@ type GitPullRebasePushDoneMsg struct {
 type GitForcePushRequestMsg struct {
 	Branch string
 }
+
+// GitForcePushDoneMsg — wynik operacji git push --force-with-lease.
+type GitForcePushDoneMsg struct {
+	Branch string
+	Err    error
+}
+
+// ─── Wiadomości Apollo Panel ──────────────────────────────────────────────
+
+// ApolloDeployRequestMsg — żądanie wdrożenia z panelu Apollo.
+// Env: nazwa środowiska. Force: true = pomiń guard "nowe commity".
+type ApolloDeployRequestMsg struct {
+	Env   string
+	Force bool
+}
+
+// ApolloRollbackRequestMsg — żądanie rollbacku z panelu Apollo.
+type ApolloRollbackRequestMsg struct {
+	Env string
+}
+
+// ApolloPromoteRequestMsg — żądanie promote DB z panelu Apollo.
+type ApolloPromoteRequestMsg struct{}
+
+// ApolloCheckoutRequestMsg — żądanie przełączenia gałęzi z panelu Apollo.
+// Wysyłane gdy Apollo musi automatycznie przełączyć na właściwą gałąź.
+type ApolloCheckoutRequestMsg struct {
+	Branch string
+}
+
+// ApolloCheckoutDoneMsg — wynik automatycznego przełączenia gałęzi przez Apollo.
+type ApolloCheckoutDoneMsg struct {
+	Branch string
+	Err    error
+}
+
+// ApolloModeEnteredMsg — informacja o wejściu w tryb Apollo.
+// Używane do wyświetlenia komunikatu o zmianie trybu.
+type ApolloModeEnteredMsg struct{}
+
+// GitPanelModeEnteredMsg — informacja o wejściu w tryb GitPanel.
+// Używane do wyświetlenia komunikatu o zmianie trybu.
+type GitPanelModeEnteredMsg struct{}

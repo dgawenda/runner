@@ -11,19 +11,22 @@
 2. [Instalacja jedną komendą](#2-instalacja-jedną-komendą)
 3. [Pierwsze uruchomienie — Setup Wizard](#3-pierwsze-uruchomienie--setup-wizard)
 4. [Filozofia działania](#4-filozofia-działania)
-5. [Jak działa GitOps i ochrona kodu](#5-jak-działa-gitops-i-ochrona-kodu)
-6. [Snapshoty i system Rollback](#6-snapshoty-i-system-rollback)
-7. [Potoki wdrożeniowe (Pipeline)](#7-potoki-wdrożeniowe-pipeline)
-8. [Pliki konfiguracyjne — rnr.yaml i rnr.conf.yaml](#8-pliki-konfiguracyjne--rnryaml-i-rnrconfyaml)
-9. [Integracje z zewnętrznymi dostawcami](#9-integracje-z-zewnętrznymi-dostawcami)
-10. [Migracje bazy danych Supabase](#10-migracje-bazy-danych-supabase)
-11. [Maskowanie sekretów — bezpieczeństwo tokenów](#11-maskowanie-sekretów--bezpieczeństwo-tokenów)
-12. [Struktura katalogów projektu](#12-struktura-katalogów-projektu)
-13. [Nazewnictwo gałęzi Git i dzienniki wdrożeń](#13-nazewnictwo-gałęzi-git-i-dzienniki-wdrożeń)
-14. [Komendy CLI](#14-komendy-cli)
-15. [Zarządzanie środowiskami](#15-zarządzanie-środowiskami)
-16. [Przeglądarka logów](#16-przeglądarka-logów)
-17. [FAQ — Często zadawane pytania](#17-faq--często-zadawane-pytania)
+5. [Architektura trybów — Dashboard, GitPanel, Apollo](#5-architektura-trybów--dashboard-gitpanel-apollo)
+6. [GitPanel — Kontrola Repozytorium](#6-gitpanel--kontrola-repozytorium)
+7. [Apollo — Panel Wdrożeń z Guardami](#7-apollo--panel-wdrożeń-z-guardami)
+8. [System Strażników Wdrożenia (Deploy Guards)](#8-system-strażników-wdrożenia-deploy-guards)
+9. [Snapshoty i system Rollback](#9-snapshoty-i-system-rollback)
+10. [Potoki wdrożeniowe (Pipeline)](#10-potoki-wdrożeniowe-pipeline)
+11. [Pliki konfiguracyjne — rnr.yaml i rnr.conf.yaml](#11-pliki-konfiguracyjne--rnryaml-i-rnrconfyaml)
+12. [Integracje z zewnętrznymi dostawcami](#12-integracje-z-zewnętrznymi-dostawcami)
+13. [Migracje bazy danych Supabase](#13-migracje-bazy-danych-supabase)
+14. [Maskowanie sekretów — bezpieczeństwo tokenów](#14-maskowanie-sekretów--bezpieczeństwo-tokenów)
+15. [Dzienniki wdrożeń (Deployment Logs)](#15-dzienniki-wdrożeń-deployment-logs)
+16. [Struktura katalogów projektu](#16-struktura-katalogów-projektu)
+17. [Komendy CLI](#17-komendy-cli)
+18. [Zarządzanie środowiskami](#18-zarządzanie-środowiskami)
+19. [Przeglądarka logów](#19-przeglądarka-logów)
+20. [FAQ — Często zadawane pytania](#20-faq--często-zadawane-pytania)
 
 ---
 
@@ -37,13 +40,13 @@ Wyobraź sobie sytuację — Twój współpracownik ukończył prace nad nową f
 
 `rnr` to narzędzie, które:
 
-- 🛡️ **Chroni Twój kod** — przed wdrożeniem sprawdza, czy repozytorium jest czyste, i automatycznie tworzy kopię zapasową
+- 🛡️ **Chroni Twój kod** — system 6 strażników (guards) blokuje błędne wdrożenia zanim do nich dojdzie
+- 🚀 **Apollo** — dedykowany tryb wdrożeń z pełną ochroną, tylko z gałęzi roboczych
+- 🔧 **GitPanel** — wizualna kontrola repozytorium w stylu GitKraken, bezpośrednio w terminalu
 - 🎯 **Prowadzi za rękę** — interaktywny Setup Wizard i przyjazny Dashboard z klawiaturą strzałkową
 - ⚡ **Działa błyskawicznie** — napisany w języku Go, uruchamia się w ułamku sekundy
 - 🔐 **Chroni Twoje sekrety** — tokeny API nigdy nie pojawiają się w logach ani na ekranie
-- ↩️ **Pozwala cofnąć się** — jednym naciśnięciem klawisza możesz przywrócić poprzedni, sprawdzony stan
-
-Jeśli kiedykolwiek bałeś się wpisać `git push` lub nie rozumiałeś, co dzieje się po kliknięciu „Deploy" — `rnr` jest właśnie dla Ciebie.
+- ↩️ **Pozwala cofnąć się** — wybierz konkretne wdrożenie do przywrócenia z interaktywnej historii
 
 ---
 
@@ -51,63 +54,38 @@ Jeśli kiedykolwiek bałeś się wpisać `git push` lub nie rozumiałeś, co dzi
 
 > ⚡ **Najprostsza możliwa instalacja z publicznego GitHuba** — jeden wiersz w terminalu.
 
-Repozytorium `dgawenda/runner` jest **publiczne**, więc w typowym scenariuszu wystarczy:
-
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh)
 ```
 
-To pobierze skrypt `install.sh` z gałęzi `master` i zainstaluje binarkę `rnr` do katalogu `.rnr/` w Twoim projekcie (lub do katalogu wskazanego przez `--dir`).
+To pobierze skrypt `install.sh` z gałęzi `master` i zainstaluje binarkę `rnr` do katalogu `~/.rnr/`.
 
-> 💡 Jeśli masz bardzo restrykcyjne limity API GitHub albo chcesz instalować z prywatnego forka, możesz przekazać token:
+> 💡 Z tokenem GitHub (dla prywatnych forków lub ominięcia limitów API):
 > ```bash
-> GITHUB_TOKEN="twój_token" bash <(curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh) --token "$GITHUB_TOKEN"
+> GITHUB_TOKEN="twój_token" bash <(curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh)
 > ```
 
 ### Co robi skrypt instalacyjny?
 
-Skrypt `install.sh` wykonuje następujące kroki automatycznie:
+1. **Wykrywa system operacyjny** (Linux, macOS, Windows) i architekturę (amd64, arm64)
+2. **Pobiera najnowszą wersję** binarną `rnr` z GitHub Releases
+3. **Tworzy katalog** `~/.rnr` i instaluje plik wykonywalny
+4. **Aktualizuje PATH** — dodaje `~/.rnr` do `.bashrc`, `.zshrc` lub `.profile`
 
-1. **Wykrywa Twój system operacyjny** (Linux, macOS, Windows) i architekturę procesora (amd64, arm64)
-2. **Pobiera najnowszą stabilną wersję** binarną `rnr` z GitHub Releases (`dgawenda/runner`) – jeśli podasz token, użyje autoryzowanego zapytania API, inaczej korzysta z publicznego dostępu
-3. **Tworzy ukryty katalog** `.rnr` w Twoim katalogu domowym
-4. **Instaluje plik wykonywalny** `rnr` w lokalizacji `~/.rnr/rnr`
-5. **Aktualizuje PATH** — dodaje `~/.rnr` do zmiennej środowiskowej `PATH` w pliku `.bashrc`, `.zshrc` lub `.profile`
-6. **Informuje o następnych krokach** — po instalacji wystarczy wpisać `rnr` w terminalu
-
-Po zakończeniu instalacji wystarczy uruchomić nową sesję terminala lub wykonać:
+Po zakończeniu:
 
 ```bash
-source ~/.bashrc  # lub ~/.zshrc, jeśli używasz ZSH
+source ~/.bashrc   # lub ~/.zshrc
+rnr version        # → rnr v1.0.1
 ```
 
-A następnie sprawdzić, czy instalacja przebiegła pomyślnie:
-
-```bash
-rnr version
-```
-
-### Szybki start z własnym projektem (dowolne „demo”)
-
-Po zainstalowaniu binarki możesz użyć `rnr` w **dowolnym repozytorium**, niezależnie od tego, jak nazywa się Twój projekt/demo:
-
-```bash
-cd /ścieżka/do/twojego/projektu   # np. ~/projects/moje-demo
-rnr init                          # uruchomi Setup Wizard i wygeneruje rnr.yaml + rnr.conf.yaml
-rnr                                # otworzy Dashboard dla tego projektu
-```
-
-- `rnr init` zawsze działa „na miejscu” — dostosuje się do aktualnego katalogu (Twojego demo).
-- `rnr` można wywoływać jako:
-  - globalne polecenie w PATH (jeśli użyłeś `install.sh` jako instalatora systemowego), albo
-  - lokalną binarkę z repo `runner`, np. `./.rnr/rnr` uruchomioną z Twojego projektu:
+### Szybki start
 
 ```bash
 cd /ścieżka/do/twojego/projektu
-/home/alti/neution/runner/.rnr/rnr --dir .
+rnr init    # Setup Wizard — generuje rnr.yaml + rnr.conf.yaml
+rnr         # otwiera Dashboard
 ```
-
-README nie zakłada żadnego konkretnego folderu demo — wystarczy, że wejdziesz do swojego projektu i użyjesz powyższych komend.
 
 ---
 
@@ -117,73 +95,60 @@ README nie zakłada żadnego konkretnego folderu demo — wystarczy, że wejdzie
 
 ### Scenariusz A: Świeży projekt (brak plików konfiguracyjnych)
 
-Uruchomienie `rnr` w pustym repozytorium uruchamia **pełny Setup Wizard**. Kreator zapyta Cię o:
+**Pełny Setup Wizard** zapyta o:
 
-- **Nazwę projektu** i URL repozytorium GitHub
-- **Typ projektu** — frontend (bez bazy) lub fullstack
-- **Wybór dostawcy wdrożenia** (Netlify, Vercel, SSH, Docker, własne skrypty)
-- **Konfigurację bazy danych** — Supabase, Prisma, PostgreSQL lub „Brak bazy" (frontend-only)
-- **Dane autoryzacyjne** — tokeny API wpisywane w bezpiecznych, maskowanych polach (`●●●●●`)
+1. **Nazwę projektu** i URL repozytorium (pełny link do klonu: `https://github.com/...` lub `git@github.com:...`)
+2. **Typ projektu** — frontend (bez bazy) lub fullstack
+3. **Dostawcę wdrożenia** — Netlify, Vercel, SSH, Docker, własne skrypty
+4. **Konfigurację bazy danych** — Supabase, Prisma, PostgreSQL, lub „Brak bazy" (frontend-only)
+5. **Dane autoryzacyjne** — tokeny API w maskowanych polach (`●●●●●`)
+6. **GitHub** — opcja podania URL zdalnego repozytorium lub użycia GitHub CLI (`gh`)
 
 Po zakończeniu kreatora `rnr` automatycznie:
-- Wygeneruje `rnr.yaml` **dopasowany do Twojego projektu** (bez etapu `migrate` jeśli wybrano „Brak bazy")
-- Wygeneruje `rnr.conf.yaml` z podanymi credentials
+- Wygeneruje `rnr.yaml` dopasowany do projektu (bez etapu `migrate` jeśli brak bazy)
+- Wygeneruje `rnr.conf.yaml` z credentials
 - Doda `rnr.conf.yaml` do `.gitignore`
-- Uruchomi główny Dashboard
-
-#### Projekt frontendowy (bez bazy danych)
-
-Jeśli w kreatorze wybierzesz **„Brak bazy"** jako dostawcę bazy danych, `rnr` wygeneruje uproszczony pipeline bez etapu migracji:
-
-```yaml
-# rnr.yaml — wygenerowany dla projektu frontendowego
-stages:
-  - name: install
-  - name: lint
-  - name: typecheck
-  - name: build
-    artifacts: dist/
-  - name: deploy         # ← Netlify / Vercel / SSH
-    type: deploy
-  - name: health
-    type: health
-```
+- Inicjalizuje repozytorium Git jeśli nie istnieje (`git init`)
+- Tworzy gałęzie środowiskowe: `master` (production) i `develop` (development)
+- Uruchomi Dashboard
 
 #### Automatyczne tworzenie projektu Netlify
 
-W wizardzie, po wyborze Netlify jako dostawcy, możesz wybrać:
+W wizardzie, po wyborze Netlify:
 
 | Opcja | Kiedy używać |
 |-------|-------------|
-| **🔗 Mam już Site ID** | Projekt Netlify już istnieje — wklej ID |
-| **✨ Utwórz nowy projekt** | rnr automatycznie wywoła `netlify sites:create` |
+| **🔗 Mam już Site ID** | Projekt Netlify już istnieje |
+| **✨ Utwórz nowy projekt** | `rnr` automatycznie wywoła `netlify sites:create` |
 
-Jeśli wybierzesz „Utwórz nowy projekt", `rnr` podczas pierwszego deployu automatycznie stworzy projekt na Netlify i wypisze jego Site ID — zapisz go w `rnr.conf.yaml → netlify_site_id` na przyszłość.
+Jeśli wybierzesz „Utwórz nowy projekt", `rnr` podczas pierwszego deployu stworzy projekt na Netlify, zapisze Site ID w `rnr.conf.yaml` i pokaże go w logach inicjalizacji.
+
+#### Gałęzie środowiskowe
+
+`rnr` automatycznie tworzy gałęzie:
+
+| Środowisko | Gałąź | Opis |
+|------------|-------|------|
+| `production` | `master` | Wdrożenia produkcyjne |
+| `development` | `develop` | Wdrożenia deweloperskie |
 
 ---
 
 ### Scenariusz B: Sklonowany projekt (rnr.yaml w repo, brak rnr.conf.yaml)
 
-Gdy `rnr.yaml` jest commitowany w repozytorium (tak jak powinien być), ale brakuje `rnr.conf.yaml` (jest gitignored), `rnr` wykrywa ten stan i:
-
-1. Wyświetla **specjalny komunikat** w wizardzie: *"Wykryłem plik rnr.yaml — uzupełnij tylko swoje credentials"*
-2. Prosi tylko o tokeny i credentials (nie pyta o strukturę projektu, która jest w `rnr.yaml`)
-3. Generuje TYLKO `rnr.conf.yaml` — nie modyfikuje `rnr.yaml`
+`rnr` wykrywa ten stan i wyświetla kreator credentials — prosi tylko o tokeny bez ponownego definiowania struktury projektu.
 
 ```bash
-# Typowy workflow dla nowego dewelopera w projekcie:
 git clone https://github.com/moja-firma/projekt.git
 cd projekt
-rnr            # ← wykryje brak rnr.conf.yaml i przeprowadzi przez credentials wizard
+rnr   # ← kreator credentials
 ```
-
-> 💡 **Dla administratora projektu:** umieść `rnr.yaml` w repozytorium. Każdy deweloper przy pierwszym uruchomieniu `rnr` zostanie przeprowadzony przez kreator credentials — bez ponownego definiowania całej struktury potoku.
 
 ---
 
-### Scenariusz C: rnr.conf.yaml istnieje, brak rnr.yaml (np. po utracie pliku)
+### Scenariusz C: rnr.conf.yaml istnieje, brak rnr.yaml
 
-`rnr` odczytuje `rnr.conf.yaml`, wykrywa typ projektu (sprawdza czy są providery bazy danych) i **automatycznie regeneruje `rnr.yaml`** bez potrzeby uruchamiania wizarda. Następnie otwiera Dashboard.
+`rnr` regeneruje `rnr.yaml` na podstawie istniejącej konfiguracji i otwiera Dashboard.
 
 ---
 
@@ -193,180 +158,326 @@ rnr            # ← wykryje brak rnr.conf.yaml i przeprowadzi przez credentials
 
 ### 🎭 Zero-Config — żadnego bólu konfiguracyjnego
 
-Nowe narzędzie powinno działać od razu po instalacji. Setup Wizard prowadzi Cię przez każdy krok z przyjaznym językiem. Nie musisz rozumieć, czym jest `CI/CD pipeline` — wystarczy, że odpiszesz na pytania kreatora.
+Nowe narzędzie powinno działać od razu po instalacji. Setup Wizard prowadzi przez każdy krok z przyjaznym językiem. Nie musisz rozumieć, czym jest `CI/CD pipeline`.
 
 ### 🛡️ Safety-First — bezpieczeństwo na pierwszym miejscu
 
-Każde wdrożenie poprzedzone jest **audytem repozytorium Git**. Jeśli cokolwiek jest „brudne" (niezacommitowane zmiany), `rnr` grzecznie odmówi i poinformuje Cię, co wymaga poprawy. Nigdy nie wdroży nieznanego kodu.
+Każde wdrożenie w Apollo jest poprzedzone **weryfikacją 6 strażników**. Jeśli cokolwiek jest nie tak, `rnr` zablokuje deployment i wyjaśni dokładnie co trzeba naprawić.
 
 ### 🔮 GitOps — Git jako źródło prawdy
 
-Każda operacja wdrożeniowa jest utrwalana w historii Git. `rnr` tworzy dedykowane gałęzie zapasowe (`rnr_backup_*`) przed każdym deploymentem, dzięki czemu zawsze możesz wrócić do poprzedniego stanu — nawet jeśli coś pójdzie nie tak.
+Każda operacja wdrożeniowa jest utrwalana w historii Git. `rnr` tworzy gałęzie zapasowe (`rnr_backup_*`) przed każdym deploymentem.
 
 ---
 
-## 5. Jak działa GitOps i ochrona kodu
+## 5. Architektura trybów — Dashboard, GitPanel, Apollo
 
-Zanim `rnr` wykona jakiekolwiek polecenie wdrożeniowe, przeprowadza **pełny audyt drzewa Git**:
-
-```
-[1/4] 🔍 Sprawdzanie stanu repozytorium...
-      git status --porcelain
-
-[2/4] 📸 Tworzenie snapshotu przedwdrożeniowego...
-      Gałąź: rnr_backup_production_20260310_143022
-
-[3/4] 💾 Zapisywanie stanu w .rnr/state.json...
-
-[4/4] 🚀 Uruchamianie potoku wdrożeniowego...
-```
-
-### Co się dzieje przy „brudnym" repozytorium?
-
-Jeśli wykryjesz niezacommitowane pliki lub nieśledzone zmiany, `rnr` wyświetli przyjazne ostrzeżenie:
+`rnr` dzieli się na trzy podnarzędzia dostępne z głównego Dashboard:
 
 ```
-╔══════════════════════════════════════════════════════╗
-║  ⚠️  Uwaga! Repozytorium jest nieczysté              ║
-║                                                      ║
-║  Następujące pliki mają niezacommitowane zmiany:     ║
-║  → src/components/Header.tsx (zmodyfikowany)         ║
-║  → src/utils/api.ts (nowy plik)                      ║
-║                                                      ║
-║  Aby kontynuować wdrożenie:                          ║
-║  1. Wykonaj: git add . && git commit -m "..."        ║
-║  2. Wróć do rnr i ponów próbę                        ║
-╚══════════════════════════════════════════════════════╝
+┌─────────────────────────────────────────────────────────────┐
+│  ⚡ rnr / projekt  [G GitPanel]  [A Apollo]    02.01 14:30  │
+├─────────────────────────────────────────────────────────────┤
+│  Dashboard — centrum dowodzenia                             │
+│  Wybierz tryb operacyjny:                                   │
+│                                                              │
+│  [G]  🔧 GitPanel  — operacje Git (commit, push, checkout)  │
+│  [A]  🚀 Apollo    — wdrożenia z pełną ochroną              │
+│  [D]  Wdróż (szybka ścieżka, bez guardów)                  │
+│  [R]  Rollback — wybierz wdrożenie z historii              │
+│  [P]  Promote DB (development → production)                 │
+│  [L]  Logi wdrożeń                                          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-`rnr` **nigdy nie wdroży automatycznie** niezacommitowanego kodu. To celowa decyzja projektowa — każda zmiana musi być świadomie zatwierdzona przez dewelopera.
+### 🔧 GitPanel — do codziennego developmentu
+
+Otwierasz klawiszem **`G`** z Dashboard. Pełna kontrola repozytorium bez opuszczania terminala. Zamykasz klawiszem **`Q`** lub **`ESC`**.
+
+### 🚀 Apollo — wyłącznie do wdrożeń
+
+Otwierasz klawiszem **`A`** z Dashboard. Wymaga gałęzi roboczych. Chroniony przez 6 strażników. Zamykasz klawiszem **`Q`** lub **`ESC`**.
 
 ---
 
-## 6. Snapshoty i system Rollback
+## 6. GitPanel — Kontrola Repozytorium
+
+> Styl GitKraken, bezpośrednio w Twoim terminalu. Otwórz klawiszem `G`.
+
+GitPanel ma cztery zakładki:
+
+| Zakładka | Opis |
+|----------|------|
+| **[1] STATUS** | Lista zmienionych plików z checkboxami, podgląd diff, commit, push |
+| **[2] GAŁĘZIE** | Lokalne gałęzie + `git checkout` wybranej (ENTER) |
+| **[3] HISTORIA** | Tabela ostatnich 30 commitów (hash, autor, data, wiadomość) |
+| **[4] GRAF ◈** | Wizualny graf commitów (styl GitKraken, kolorowe linie) |
+
+### Skróty klawiaturowe — GitPanel
+
+| Kontekst | Klawisz | Akcja |
+|----------|---------|-------|
+| Dowolna zakładka | `TAB` / `1–4` | Przełącz zakładkę |
+| Dowolna zakładka | `Q` / `ESC` | Wróć do Dashboard |
+| Listy | `↑ / ↓` lub `j / k` | Nawigacja po wierszach |
+| **Status** — lista plików | `SPACJA` | Zaznacz/odznacz plik do commita (checkbox) |
+| **Status** — lista plików | `a / A` | Zaznacz wszystkie / odznacz wszystkie |
+| **Status** — lista plików | `d` / `ENTER` | Podgląd kolorowego `diff` zaznaczonego pliku |
+| **Status** — lista plików | `i` | Wejście w edycję wiadomości commita |
+| **Status** — input commita | `ENTER` | `git add <wybrane> && git commit` |
+| **Status** — input commita | `ESC` | Wyjście z edycji |
+| **Status** | `p` / `P` | `git push origin <branch>` |
+| **Status** — push conflict | `u` / `U` | `git pull --rebase && push` |
+| **Status** — push conflict | `f` / `F` | `git push --force-with-lease` |
+| **Gałęzie** | `ENTER` | `git checkout <gałąź>` |
+| **Graf** | `↑ / ↓` | Przewijanie grafu |
+
+### Wybór plików do commita
+
+W zakładce **Status** każdy plik ma checkbox `[ ]` lub `[✓]`. Zaznacz konkretne pliki spacją lub użyj `a` dla wszystkich. Przy commicie `rnr` wykona `git add <tylko_zaznaczone>`.
+
+### Obsługa konfliktów push (non-fast-forward)
+
+Jeśli `git push` zostanie odrzucony (remote jest do przodu), GitPanel wyświetli ekran wyboru:
+
+```
+⎇  Konflikt Push — remote jest do przodu
+
+Opcje:
+  [U]  git pull --rebase + push   ← zalecane
+  [F]  git push --force-with-lease
+  [ESC] Anuluj
+```
+
+### Wizualizacja grafu (styl Dracula)
+
+```
+● a1b2c3d  HEAD → master   feat: nowy system płatności  (Jan Kowalski, 2h temu)
+│
+● b2c3d4e              fix: poprawka formularza        (Anna Nowak, 1d temu)
+│╲
+│ ● c3d4e5f  origin/develop  chore: aktualizacja deps  (Jan Kowalski, 3d temu)
+│╱
+● d4e5f6g              init: projekt                   (Jan Kowalski, 7d temu)
+```
+
+Kolory: `●` fiolet = commit HEAD, `│╱╲` grafit = linie, `⎇` cyjan = gałąź, `🏷` róż = tag.
+
+---
+
+## 7. Apollo — Panel Wdrożeń z Guardami
+
+> Tryb wdrożeń z maksymalnym bezpieczeństwem. Otwórz klawiszem `A`.
+
+```
+🚀 Apollo — Panel Wdrożeń  (Q = wróć do Dashboard)
+⚡ Tryb Apollo: wdrożenia wyłącznie z gałęzi roboczych (master/develop) · wszystkie operacje są chronione strażnikami
+──────────────────────────────────────────────────────────────
+ 1 PRZEGLĄD    2 HISTORIA
+```
+
+### Zakładki Apollo
+
+| Zakładka | Opis |
+|----------|------|
+| **[1] PRZEGLĄD** | Selektor środowisk + wyniki strażników + przyciski akcji |
+| **[2] HISTORIA** | Historia wdrożeń ze statusami, autorami i haszami commitów |
+
+### Skróty klawiaturowe — Apollo
+
+| Klawisz | Akcja |
+|---------|-------|
+| `1` / `2` | Przełącz zakładkę |
+| `↑ / ↓` lub `j / k` | Zmień środowisko (Przegląd) / nawigacja historii |
+| `D` | Wdróż na wybrane środowisko (tylko gdy guards OK) |
+| `R` | Rollback — wybierz wdrożenie z listy |
+| `P` | Promote DB (development → production) |
+| `S` | Przełącz gałąź na wymaganą dla środowiska |
+| `F` | Włącz/wyłącz tryb wymuszenia (pomija guard "nowe commity") |
+| `Q` / `ESC` | Wróć do Dashboard |
+
+### Automatyczne przełączanie gałęzi
+
+Gdy naciskasz `D` lub `S`, Apollo sprawdza czy jesteś na właściwej gałęzi:
+
+```
+⎇  Przełączenie gałęzi
+
+Apollo wymaga gałęzi 'master' dla wybranego środowiska.
+
+Aktualna gałąź:  feature/new-payment
+Docelowa gałąź:  master
+
+Apollo wykona: git checkout master
+
+Upewnij się że masz zatwierdzone wszystkie zmiany.
+
+[ ENTER / Y = Przełącz ]   [ ESC / N = Anuluj ]
+```
+
+### Tryb wymuszenia (Force Redeploy)
+
+Klawisz `F` włącza tryb `[FORCE]`, który ignoruje guard "Nowe commity". Przydatny gdy chcesz powtórzyć deploy bez nowych zmian (np. po zmianie konfiguracji infrastruktury).
+
+---
+
+## 8. System Strażników Wdrożenia (Deploy Guards)
+
+Apollo przed każdym deployem weryfikuje 6 strażników:
+
+| # | Strażnik | Poziom | Co sprawdza |
+|---|---------|--------|-------------|
+| 1 | **Gałąź robocza** | 🔴 Blokuje | Musi być `master` (prod) lub `develop` (dev) |
+| 2 | **Stan Git** | 🔴 Blokuje | Brak detached HEAD, repo ma przynajmniej 1 commit |
+| 3 | **Czystość repo** | 🔴 Blokuje | Brak niezatwierdzonych śledzonych plików |
+| 4 | **Historia commitów** | 🔴 Blokuje | Repozytorium nie jest puste |
+| 5 | **Nowe commity** | 🟡 Ostrzega | Są nowe commity od ostatniego deployu |
+| 6 | **Konfiguracja** | 🔴 Blokuje | Dostawca wdrożenia ma kompletne credentials |
+
+### Wizualizacja strażników w Apollo
+
+```
+🛡  Strażnicy wdrożenia:
+
+  ✓  Gałąź robocza      Gałąź ⎇ master ✓
+  ✓  Stan Git            Repozytorium zdrowe, HEAD: a1b2c3d
+  ✓  Czystość repo       Brak niezatwierdzonych zmian ✓
+  ✓  Historia commitów   Ostatni commit: a1b2c3d — feat: nowy panel
+  ⚠  Nowe commity        Brak zmian od ostatniego deploy (11.03 14:30)
+     ↳ Zatwierdź nowe zmiany lub użyj opcji wymuszenia (F — force redeploy)
+  ✓  Konfiguracja        Dostawca: netlify ✓
+
+  ⚠  1 strażnik ostrzega — możesz wdrożyć lub użyć F (force)
+```
+
+### Stany strażników
+
+| Ikona | Znaczenie | Działanie |
+|-------|-----------|-----------|
+| `✓` zielony | Zaliczony | Brak |
+| `⚠` żółty | Ostrzeżenie (`WARN`) | Deploy możliwy, ale zalecana uwaga |
+| `✗` czerwony | Blokada (`BLOCK`) | Deploy niemożliwy — napraw problem |
+
+---
+
+## 9. Snapshoty i system Rollback
 
 ### Automatyczne snapshoty
 
-Przed każdym wdrożeniem `rnr` tworzy **deterministyczny snapshot** w formie gałęzi Git:
+Przed każdym wdrożeniem `rnr` tworzy deterministyczny snapshot w formie gałęzi Git:
 
 ```
-rnr_backup_<środowisko>_<data>_<czas>
+rnr_backup_<środowisko>_<YYYYMMDD>_<HHMMSS>
 ```
 
 Przykłady:
 - `rnr_backup_production_20260310_143022`
-- `rnr_backup_staging_20260309_091500`
+- `rnr_backup_development_20260309_091500`
 
-Informacja o każdym snapshocie jest zapisywana w pliku `.rnr/state.json`:
+### Rollback z wyborem wdrożenia
 
-```json
-{
-  "history": [
-    {
-      "timestamp": "2026-03-10T14:30:22Z",
-      "environment": "production",
-      "commit_hash": "a1b2c3d4e5f6...",
-      "snapshot_ref": "rnr_backup_production_20260310_143022",
-      "status": "success",
-      "message": "Deploy do Produkcji - [feat: nowy system płatności]"
-    }
-  ]
-}
-```
-
-### Funkcja Rollback — „Szybki powrót"
-
-W przypadku wykrycia błędów po wdrożeniu, w Dashboardzie `rnr` dostępna jest opcja **Rollback** (klawisz `R`):
+W Apollo naciśnij **`R`** lub na Dashboard **`R`** — otwiera się interaktywna lista wyboru:
 
 ```
-╔══════════════════════════════════════════════════════╗
-║  ↩️  Rollback — Szybki powrót                        ║
-║                                                      ║
-║  Ostatnie wdrożenia:                                 ║
-║  → [10.03.2026 14:30] production — POWODZENIE ✓     ║
-║  → [09.03.2026 09:15] staging — POWODZENIE ✓        ║
-║  → [08.03.2026 16:45] production — BŁĄD ✗           ║
-║                                                      ║
-║  Wybierz punkt przywrócenia: ↑↓ Enter               ║
-╚══════════════════════════════════════════════════════╝
+↩️  Rollback — wybierz wdrożenie
+Środowisko: production
+
+  St.  Data           Commit   Autor         Wiadomość
+  ──────────────────────────────────────────────────────
+▶ ✓    10.03 14:30:22  a1b2c3d  Jan Kowalski  feat: nowy panel
+  ✓    09.03 09:15:00  b2c3d4e  Anna Nowak    fix: formularz
+  ↩    08.03 17:59:32  ↩ cofn.  Jan Kowalski  Rollback do b2c3d4e
+
+  ↑↓ / j k = nawigacja   ENTER / SPACJA = potwierdź   ESC / Q = anuluj
+```
+
+#### Pierwsze wdrożenie — rollback niemożliwy
+
+Jeśli nie ma jeszcze żadnego wdrożenia, `rnr` wyświetli czytelny komunikat:
+
+```
+❌ Rollback niemożliwy — pierwsze wdrożenie
+
+Środowisko 'production' nie ma jeszcze żadnych wdrożeń.
+Rollback wymaga przynajmniej jednego wdrożenia zakończonego sukcesem.
+
+Uruchom pierwsze wdrożenie klawiszem D.
 ```
 
 #### ⚠️ Ważne ostrzeżenie dla baz danych
 
-Rollback **cofa kod aplikacji**, ale **NIE cofa zmian w bazie danych**. Jeśli wdrożenie obejmowało migracje bazodanowe, `rnr` wyświetli wyraźne ostrzeżenie:
-
-```
-╔══════════════════════════════════════════════════════╗
-║  🚨 OSTRZEŻENIE: Operacja nieodwracalna              ║
-║                                                      ║
-║  Rollback cofnie KOD APLIKACJI, ale NIE DANE         ║
-║  w bazie danych. Jeśli wdrożenie zawierało           ║
-║  migracje SQL, cofnięcie kodu może spowodować        ║
-║  niespójności danych.                                ║
-║                                                      ║
-║  Przed kontynuacją skonsultuj się z zespołem.        ║
-║  Czy na pewno chcesz kontynuować? [T/N]              ║
-╚══════════════════════════════════════════════════════╝
-```
+Rollback **cofa kod aplikacji**, ale **NIE cofa zmian w bazie danych**. Jeśli wdrożenie obejmowało migracje bazodanowe, `rnr` wyświetli stosowne ostrzeżenie.
 
 ---
 
-## 7. Potoki wdrożeniowe (Pipeline)
+## 10. Potoki wdrożeniowe (Pipeline)
 
-Potok wdrożeniowy definiujesz w pliku `rnr.yaml`. Każdy etap (`stage`) jest wykonywany sekwencyjnie z pełną informacją wizualną w TUI:
+Potok wdrożeniowy definiujesz w pliku `rnr.yaml`:
 
 ```yaml
 # Przykładowy potok dla aplikacji fullstack
 stages:
-  - name: "Przygotowanie"
-    steps:
-      - run: "npm run build"
-        description: "Budowanie aplikacji frontendowej"
 
-  - name: "Wdrożenie Frontend"
-    provider: "netlify"
-    steps:
-      - deploy:
-          environment: "production"
+  - name: install
+    run: npm ci
+    description: "Instalacja zależności npm"
 
-  - name: "Migracje Bazy Danych"
-    provider: "supabase"
-    steps:
-      - database_migrate:
-          environment: "production"
+  - name: lint
+    run: npm run lint
+    allow_failure: true
+    description: "Sprawdzanie stylu kodu"
 
-  - name: "Powiadomienie"
-    provider: "github"
-    steps:
-      - release:
-          environment: "production"
+  - name: build
+    run: npm run build
+    artifacts: dist/
+    description: "Budowanie wersji produkcyjnej"
+
+  - name: migrate
+    type: database
+    only: [production, development]
+    description: "Migracje bazy danych Supabase"
+
+  - name: deploy
+    type: deploy
+    description: "Wdrożenie na Netlify"
+
+  - name: health
+    type: health
+    allow_failure: true
+    description: "Sprawdzenie dostępności po wdrożeniu"
 ```
 
 ### Wizualizacja potoku w TUI
 
-Podczas wykonywania potoku, `rnr` wyświetla w czasie rzeczywistym:
-
 ```
-Pipeline: Wdrożenie na Produkcję
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Pipeline: Wdrożenie na production
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✓  Etap 1/4: Przygotowanie             [00:12]
-⠸  Etap 2/4: Wdrożenie Frontend        [00:34]  ▓▓▓▓▓▓░░░░  62%
-○  Etap 3/4: Migracje Bazy Danych      [oczekuje]
-○  Etap 4/4: Powiadomienie GitHub      [oczekuje]
+✓  [1/5] install      Instalacja zależności npm           [12s]
+✓  [2/5] lint         Sprawdzanie stylu kodu              [3s]
+⠸  [3/5] build        Budowanie wersji produkcyjnej       [34s]  ▓▓▓▓░░  62%
+○  [4/5] migrate      Migracje bazy danych Supabase       [oczekuje]
+○  [5/5] deploy       Wdrożenie na Netlify                [oczekuje]
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Logi na żywo:
-  [netlify] ✓ Build cache warmed up
-  [netlify] ✓ Uploading 247 files...
-  [netlify] ⠸ Processing assets...
+  [npm] ✓ Build cache warmed up
+  [npm] ✓ Uploading 247 files...
 ```
 
-Spinner `⠸` oznacza aktywne działanie — `rnr` **nigdy nie zamarza wizualnie** bez powodu. Zawsze wiesz, co dzieje się w tle.
+### Opisy etapów w logach Netlify
+
+Każde wdrożenie na Netlify zawiera szczegółowy opis widoczny w panelu Netlify:
+
+```
+[production] Jan Kowalski <jan@firma.pl> — feat: nowy system płatności
+deploy: production • branch: master • commit: a1b2c3d • 10.03.2026 14:30:22
+project: moja-aplikacja
+```
 
 ---
 
-## 8. Pliki konfiguracyjne — rnr.yaml i rnr.conf.yaml
+## 11. Pliki konfiguracyjne — rnr.yaml i rnr.conf.yaml
 
 ### Podział odpowiedzialności
 
@@ -375,36 +486,30 @@ Spinner `⠸` oznacza aktywne działanie — `rnr` **nigdy nie zamarza wizualnie
 | Commitowanie do Git | ✅ **Tak** | ❌ Nigdy |
 | Zawartość | Projekt + środowiska + pipeline | Wyłącznie tokeny i hasła |
 | Udostępnianie w zespole | ✅ Każdy widzi | ❌ Prywatny per developer |
-| Generowany przez Wizard | ✅ Tak | ✅ Tak |
 | Ochrona `.gitignore` | Nie potrzebna | ✅ Automatyczna |
 
 ---
 
-### rnr.yaml — Projekt, środowiska i pipeline (bezpieczny do commitowania)
-
-Plik definiuje **całą konfigurację projektu bez żadnych sekretów**. Commituj go do repozytorium — dzięki temu każdy developer w zespole widzi tę samą strukturę wdrożeń.
+### rnr.yaml — Projekt, środowiska i pipeline
 
 ```yaml
-# ─── Projekt ─────────────────────────────────────────────────────────────────
+# ─── Projekt ──────────────────────────────────────────────────────────────
 project:
   name: "moja-aplikacja"
   version: "1.0.0"
-  repo: "moja-firma/moja-aplikacja"
+  repo: "https://github.com/moja-firma/moja-aplikacja.git"
 
-# ─── Środowiska (BEZ tokenów!) ────────────────────────────────────────────────
-# Każde środowisko definiuje: gałąź, URL, dostawców i zmienne środowiskowe.
-# Tokeny i hasła → WYŁĄCZNIE rnr.conf.yaml
-
+# ─── Środowiska ───────────────────────────────────────────────────────────
 environments:
 
   production:
-    branch: "master"
+    branch: "master"        # ← gałąź wymagana przez Apollo
     url: "https://moja-aplikacja.com"
-    protected: true      # ⚠️ wymaga potwierdzenia przed deploym
+    protected: true         # ⚠️ wymaga potwierdzenia przed deploym
 
     deploy:
       provider: "netlify"
-      netlify_prod: true # true = --prod (produkcyjny URL Netlify)
+      netlify_prod: true    # true = --prod (produkcyjny URL Netlify)
 
     database:
       provider: "supabase"
@@ -412,8 +517,8 @@ environments:
     env:
       NODE_ENV: "production"
 
-  staging:
-    branch: "develop"
+  development:              # ← skrót: dev
+    branch: "develop"       # ← gałąź wymagana przez Apollo
     url: ""
     protected: false
 
@@ -425,25 +530,21 @@ environments:
       provider: "supabase"
 
     env:
-      NODE_ENV: "staging"
+      NODE_ENV: "development"
 
-# ─── Etapy potoku ─────────────────────────────────────────────────────────────
+# ─── Etapy potoku ──────────────────────────────────────────────────────────
 stages:
 
   - name: install
     run: npm ci
 
-  - name: lint
-    run: npm run lint
-    allow_failure: true
-
   - name: build
     run: npm run build
     artifacts: dist/
 
-  - name: migrate          # pomiń jeśli nie używasz bazy danych
+  - name: migrate
     type: database
-    only: [production, staging]
+    only: [production, development]
 
   - name: deploy
     type: deploy
@@ -453,152 +554,78 @@ stages:
     allow_failure: true
 ```
 
-> 💡 **Wskazówka dla projektu frontendowego (bez bazy):** Usuń lub zakomentuj etap `migrate` i ustaw `database.provider: "none"` w każdym środowisku. Wizard zrobi to automatycznie jeśli wybierzesz „Brak bazy".
-
 ---
 
 ### rnr.conf.yaml — Sejf Sekretów (NIE COMMITOWAĆ!)
 
-Plik zawiera **wyłącznie wrażliwe dane** — tokeny API, hasła, klucze bazy danych. `rnr` automatycznie dodaje go do `.gitignore`. **Każdy developer trzyma własną kopię lokalnie** z własnymi tokenami.
-
 ```yaml
-# Opcjonalne nadpisanie autora wdrożenia
 project:
-  actor: ""           # puste = używa git config user.name
+  actor: ""          # puste = git config user.name
   actor_email: ""
-
-# Webhooki (np. Slack)
-notifications:
-  slack_webhook: ""
-
-# ─── Sekrety per środowisko ────────────────────────────────────────────────
-# Klucze MUSZĄ odpowiadać nazwom środowisk z rnr.yaml → environments.
 
 environments:
 
   production:
     deploy:
-      netlify_auth_token: "nfp_TWOJ_TOKEN"   # Netlify → User Settings → PAT
-      netlify_site_id: "uuid-twojej-strony"  # Netlify → Site → General → Site ID
+      netlify_auth_token: "nfp_TWOJ_TOKEN"
+      netlify_site_id: "uuid-twojej-strony"  # lub zostaw puste + netlify_create_new: true
 
     database:
-      supabase_project_ref: "abcdefghijklmn" # Supabase → Project Settings → General
+      supabase_project_ref: "abcdefghijklmn"
       supabase_db_url: "postgresql://postgres:[HASLO]@db.xxx.supabase.co:5432/postgres"
       supabase_anon_key: "eyJhbGciOiJIUzI1..."
-      supabase_service_role_key: "eyJhbGciOiJIUzI1..."
 
-  staging:
+  development:
     deploy:
-      netlify_auth_token: "nfp_TWOJ_TOKEN"   # Może być ten sam token
-      netlify_site_id: "uuid-INNEJ-strony"   # ALE inny Site ID!
+      netlify_auth_token: "nfp_TWOJ_TOKEN"   # może być ten sam token
+      netlify_site_id: "uuid-INNEJ-strony"   # inny Site ID!
+      netlify_create_new: false
 
     database:
-      supabase_project_ref: "inny-ref-staging"   # INNY projekt Supabase!
+      supabase_project_ref: "inny-ref-dev"
       supabase_db_url: "postgresql://..."
       supabase_anon_key: "eyJhbGciOiJIUzI1..."
-      supabase_service_role_key: "eyJhbGciOiJIUzI1..."
 ```
-
-### Przepływ ładowania konfiguracji
-
-Przy starcie `rnr` scala oba pliki w pamięci:
-
-```
-rnr.yaml                    rnr.conf.yaml
-┌─────────────────┐         ┌─────────────────────┐
-│ environments:   │         │ environments:        │
-│   production:   │         │   production:        │
-│     branch: ...│  merge  │     deploy:          │
-│     deploy:     │ ──────► │       netlify_token  │
-│       provider  │         │     database:        │
-│     database:   │         │       supabase_url   │
-│       provider  │         └─────────────────────┘
-└─────────────────┘
-         ↓
-   Merged Environment (używany przez providers, TUI)
-```
-
-Tokeny nigdy nie opuszczają pamięci programu w postaci jawnego tekstu — są maskowane w logach i `STDOUT`.
 
 ---
 
-## 9. Integracje z zewnętrznymi dostawcami
-
-`rnr` nie wykonuje deploymentu samodzielnie — jest **dyrygentem orkiestry**, która zarządza wyspecjalizowanymi narzędziami zewnętrznymi.
+## 12. Integracje z zewnętrznymi dostawcami
 
 ### Netlify — Wdrożenia frontendowe
 
-`rnr` wywołuje Netlify CLI (`netlify deploy`) z odpowiednimi flagami zdefiniowanymi w konfiguracji:
+`rnr` wywołuje Netlify CLI z odpowiednimi flagami i szczegółowym opisem wdrożenia:
 
 ```
-Provider: Netlify
-→ netlify deploy --prod --build-dir dist
-→ NETLIFY_AUTH_TOKEN=*** (zamaskowany)
-→ NETLIFY_SITE_ID=***    (zamaskowany)
+netlify deploy --prod \
+  --dir dist \
+  --message "Jan Kowalski <jan@firma.pl> — feat: nowy panel (production, master, a1b2c3d, 10.03.2026 14:30)"
 ```
 
-Wymagania: Netlify CLI musi być zainstalowane (`npm install -g netlify-cli`)
+Wymagania: `npm install -g netlify-cli`
 
-#### Automatyczne tworzenie projektu Netlify (gdy jeszcze go nie ma)
+#### Automatyczne tworzenie projektu i Site ID
 
-Jeśli w Setup Wizard wybierzesz Netlify jako dostawcę deployu, pojawi się dodatkowy krok:
-
-- **„Projekt Netlify”**:
-  - **Mam już Site ID** — wklejasz istniejące `netlify_site_id` z panelu Netlify,
-  - **Utwórz nowy projekt** — `rnr` sam wywoła `netlify sites:create` i założy nowy projekt.
-
-Wygenerowany fragment konfiguracji po wyborze "Utwórz nowy projekt":
-
-**rnr.yaml** (ustawienia bez sekretów):
-```yaml
-environments:
-  production:
-    deploy:
-      provider: "netlify"
-      netlify_prod: true    # produkcyjny URL
-```
-
-**rnr.conf.yaml** (tylko tokeny):
-```yaml
-environments:
-  production:
-    deploy:
-      netlify_auth_token: "nfp_twój_token"
-      netlify_site_id: ""               # zostanie uzupełnione po pierwszym deployu
-      netlify_create_new: true          # rnr sam wywoła netlify sites:create
-```
-
-Przy pierwszym `rnr deploy`:
-
-1. `rnr` wywoła `netlify sites:create --json`,
-2. wyłuska wygenerowany **Site ID**, pokaże go w TUI i logach (zamaskowany w tokenach),
-3. użyje go do `netlify deploy`,
-4. wyświetli komunikat, abyś **zapisał Site ID** w `rnr.conf.yaml` (`netlify_site_id`), jeśli chcesz mieć go na stałe.
+Gdy `netlify_create_new: true` i `netlify_site_id` jest puste:
+1. `rnr` wywołuje `netlify sites:create --json`
+2. Zapisuje wygenerowany Site ID do `rnr.conf.yaml`
+3. Loguje Site ID w pliku `.rnr/logs/init.log`
+4. Kontynuuje deploy z nowym Site ID
 
 ### Supabase — Migracje bazy danych
 
-`rnr` zarządza migracjami przez Supabase CLI:
-
 ```
-Provider: Supabase
-→ supabase migration up
-→ SUPABASE_ACCESS_TOKEN=***  (zamaskowany)
-→ SUPABASE_PROJECT_REF=***   (zamaskowany)
+supabase migration up
+SUPABASE_ACCESS_TOKEN=***  (zamaskowany)
+SUPABASE_PROJECT_REF=***   (zamaskowany)
 ```
 
-Wymagania: Supabase CLI musi być zainstalowane (`npm install -g supabase`)
+Wymagania: `npm install -g supabase`
 
-### GitHub — Releases i wiadomości commitów
+### GitHub CLI (`gh`)
 
-`rnr` automatycznie tworzy **oznaczone wydania** na GitHubie z czytelną nazwą:
+Jeśli `gh` jest zainstalowane, Setup Wizard oferuje użycie go do zarządzania zdalnym repozytorium. `rnr` może sprawdzić dostępność `gh` i zaproponować instalację.
 
-```
-Release: "Deploy do Produkcji - [feat: nowy system płatności] (2026-03-10 14:30)"
-```
-
-### Własne skrypty (Shell Provider)
-
-Możesz definiować dowolne polecenia shellowe w konfiguracji:
+### Własne skrypty
 
 ```yaml
 deploy:
@@ -607,61 +634,39 @@ deploy:
 
 ---
 
-## 10. Migracje bazy danych Supabase
-
-Zarządzanie bazą danych to najbardziej **krytyczna** część procesu wdrożeniowego. `rnr` traktuje migracje ze szczególną ostrożnością.
+## 13. Migracje bazy danych Supabase
 
 ### Zasada „Roll-forward"
 
-`rnr` stosuje wyłącznie **zmiany addytywne** (roll-forward) przy migracjach:
+`rnr` stosuje wyłącznie **zmiany addytywne**:
 
-- ✅ Dodawanie nowych kolumn, tabel, indeksów
+- ✅ Dodawanie kolumn, tabel, indeksów
 - ✅ Rozszerzanie typów danych
-- ❌ Cofanie usuniętych kolumn z danymi (nieodwracalne!)
+- ❌ Cofanie usuniętych kolumn z danymi
 - ❌ Zmiana typów kolumn z utratą danych
 
-Jeśli Twój skrypt migracji zawiera operacje potencjalnie destrukcyjne (np. `DROP TABLE`, `DELETE FROM`), `rnr` wyświetli ostrzeżenie i wymaga potwierdzenia.
+### Komenda `promote`
 
-### Komenda `rnr promote`
-
-Dedykowana komenda do przepychania migracji ze środowiska staging do produkcji:
+Przepychanie migracji ze środowiska development do production:
 
 ```bash
-rnr promote --from staging --to production
+# W TUI (klawisz P w Dashboard lub Apollo)
+# lub z CLI:
+rnr promote
 ```
 
-Proces `promote`:
-1. Odczytuje skrypty migracji z katalogu `supabase/migrations/`
-2. Sprawdza, które migracje zostały już zastosowane w produkcji
-3. Wyświetla listę **nowych, nieaplikowanych migracji** do zatwierdzenia
-4. Po zatwierdzeniu przez użytkownika aplikuje je sekwencyjnie
+Proces:
+1. Odczytuje skrypty migracji z `supabase/migrations/`
+2. Sprawdza, które migracje są już w production
+3. Wyświetla listę nowych migracji do zatwierdzenia
+4. Aplikuje sekwencyjnie po potwierdzeniu
 5. Zapisuje stan w `.rnr/state.json`
-
-### Dwie instancje Supabase
-
-`rnr` obsługuje oddzielne projekty Supabase dla każdego środowiska:
-
-```yaml
-# rnr.conf.yaml
-environments:
-  - name: "staging"
-    database:
-      supabase_project_ref: "projekt-staging-ref"
-      supabase_service_role_key: "klucz-staging..."
-
-  - name: "production"
-    database:
-      supabase_project_ref: "projekt-prod-ref"
-      supabase_service_role_key: "klucz-produkcji..."
-```
 
 ---
 
-## 11. Maskowanie sekretów — bezpieczeństwo tokenów
+## 14. Maskowanie sekretów — bezpieczeństwo tokenów
 
-`rnr` parsuje **cały output** wszystkich zewnętrznych narzędzi (Netlify CLI, Supabase CLI, własne skrypty) w czasie rzeczywistym.
-
-Jeśli w strumieniu wyjściowym pojawi się sekwencja znaków pasująca do któregokolwiek sekretu z `rnr.conf.yaml`, zostanie ona **automatycznie zastąpiona** łańcuchem `***`:
+`rnr` parsuje cały output zewnętrznych narzędzi w czasie rzeczywistym:
 
 ```
 # Bez maskowania (niebezpieczne):
@@ -671,327 +676,247 @@ Netlify deploy: token=nfp_abc123xyz456secret
 Netlify deploy: token=***
 ```
 
-Maskowanie obejmuje:
-- Wszystkie tokeny API z `rnr.conf.yaml`
-- Klucze serwisowe baz danych
-- Hasła i dane uwierzytelniające
-
-Logi zapisywane do plików w `.rnr/logs/` **również są maskowane** — nikt, kto uzyska dostęp do plików logów, nie zobaczy prawdziwych tokenów.
+Maskowanie obejmuje tokeny API, klucze bazy danych, hasła i credentiale. Logi w `.rnr/logs/` są również maskowane.
 
 ---
 
-## 12. Struktura katalogów projektu
+## 15. Dzienniki wdrożeń (Deployment Logs)
 
-Po instalacji i konfiguracji Twój projekt będzie wyglądał następująco:
+### Szczegółowe logi w czasie rzeczywistym
+
+Każde wdrożenie zapisuje kompletny dziennik do `.rnr/logs/`:
+
+```
+=== Wdrożenie: a1b2c3d4-e5f6-... ===
+Projekt:     moja-aplikacja
+Środowisko:  production
+Gałąź:       master
+Commit:      a1b2c3d — feat: nowy system płatności
+Autor:       Jan Kowalski <jan@firma.pl>
+Data:        2026-03-10 14:30:22 CET
+--------------------------------------------------
+
+[14:30:22] ▶ ETAP [1/5]: install — Instalacja zależności npm
+[14:30:34] ✓ install zakończony [12s]
+
+[14:30:34] ▶ ETAP [2/5]: build — Budowanie wersji produkcyjnej
+  > npm run build
+  ✓ Build completed in 34s — dist/ (1.8MB)
+[14:31:08] ✓ build zakończony [34s]
+
+[14:31:08] ▶ ETAP [3/5]: deploy — Wdrożenie na Netlify
+  > netlify deploy --prod --dir dist --message "..."
+  ✓ Site deployed: https://moja-aplikacja.netlify.app
+[14:31:45] ✓ deploy zakończony [37s]
+
+[14:31:45] ✅ WDROŻENIE ZAKOŃCZONE SUKCESEM [1m 23s]
+Środowisko: production | Commit: a1b2c3d | ID: a1b2c3d4-e5f6
+```
+
+### Logi po awarii / crash recovery
+
+Jeśli `rnr` napotka krytyczny błąd (panic), log zawiera:
+
+```
+[14:31:45] 💥 KRYTYCZNY BŁĄD — crash recovery
+  panic: runtime error: ...
+  goroutine 1 [running]:
+  main.cmdRunPipeline(...)
+    /path/to/model.go:1588
+  [pełny stack trace]
+
+  Wdrożenie oznaczone jako: FAILED
+  Możliwy rollback do poprzedniej wersji: R w Dashboard
+```
+
+---
+
+## 16. Struktura katalogów projektu
 
 ```
 mój-projekt/
-├── .rnr/                      # Ukryty katalog rnr (automatycznie tworzony)
-│   ├── rnr                    # Plik wykonywalny narzędzia
-│   ├── state.json             # Historia wdrożeń i snapshoty
-│   ├── logs/                  # Dzienniki wdrożeń (z datą w nazwie)
-│   │   ├── production_20260310-143022.log
-│   │   ├── staging_20260309-091500.log
-│   │   └── ...
-│   └── snapshots/             # Informacje o snapshotach rollback
-├── src/                       # Kod źródłowy Twojej aplikacji
-├── rnr.yaml                   # Konfiguracja potoku (bezpieczna, commituj!)
-├── rnr.conf.yaml              # Sekrety i tokeny (NIGDY nie commituj!)
-├── .gitignore                 # Automatycznie zawiera wpis dla rnr.conf.yaml
-└── ...
+├── .rnr/                          # Ukryty katalog rnr
+│   ├── snapshots/
+│   │   └── state.json             # Historia wdrożeń i snapshoty Git
+│   └── logs/                      # Dzienniki wdrożeń
+│       ├── production_20260310-143022.log
+│       ├── development_20260309-091500.log
+│       ├── rollback_20260308-175932.log
+│       └── init.log               # Log inicjalizacji projektu
+├── src/                           # Kod źródłowy aplikacji
+├── rnr.yaml                       # Konfiguracja potoku (commituj!)
+├── rnr.conf.yaml                  # Sekrety i tokeny (NIGDY nie commituj!)
+└── .gitignore                     # Automatycznie zawiera rnr.conf.yaml
 ```
 
-### Pliki logów
-
-Każde wdrożenie tworzy dedykowany plik logu z pełną datą i godziną:
+### Gałęzie Git tworzone przez rnr
 
 ```
-.rnr/logs/production_20260310-143022.log
-          ^^^^^^^^^^ ^^^^^^^^^^^^^^^
-          środowisko data i czas wdrożenia
+master                    ← production
+develop                   ← development
+rnr_backup_production_*   ← snapshoty przed wdrożeniem
+rnr_backup_development_*  ← snapshoty przed wdrożeniem
 ```
-
-Logi zawierają:
-- Pełny output wszystkich wywołanych narzędzi zewnętrznych
-- Informacje o każdym kroku potoku
-- Błędy i ostrzeżenia
-- Wszystko z zamaskowanymi sekretami
 
 ---
 
-## 13. Nazewnictwo gałęzi Git i dzienniki wdrożeń
-
-`rnr` nadaje **autorski, unikalny styl** nazewnictwu gałęzi zapasowych w Git. Każda gałąź snapshot nosi starannie skomponowaną nazwę:
-
-```
-rnr_backup_<środowisko>_<YYYYMMDD><HHMMSS>
-```
-
-Przykłady:
-```
-rnr_backup_production_20260310143022
-rnr_backup_staging_20260309091500
-rnr_backup_production_20260308175932
-```
-
-### Dlaczego to jest ważne?
-
-Dzięki temu schematowi nazewnictwa:
-
-1. **Porządek w historii Git** — gałęzie `rnr_backup_*` są zawsze łatwo identyfikowalne w grafie commitów
-2. **Deterministyczność** — z nazwy gałęzi natychmiast wiesz, kiedy i dla którego środowiska został utworzony snapshot
-3. **Automatyczna archiwizacja** — każdy deploy zostawia za sobą wyraźny ślad w Git, który można przeglądać w dowolnym narzędziu (GitKraken, Sourcetree, `git log`)
-4. **Szybki rollback** — jeśli coś pójdzie nie tak, możesz bez `rnr` wykonać: `git checkout rnr_backup_production_20260310143022`
-
-### Wiadomości commitów (normalizacja)
-
-Przy tworzeniu GitHub Release, `rnr` generuje znormalizowane wiadomości w formacie:
-
-```
-Deploy do Produkcji - [feat: nowy panel administracyjny] (2026-03-10 14:30)
-Deploy do Staging - [fix: błąd w formularzu logowania] (2026-03-09 09:15)
-```
-
-Format: `Deploy do <Środowisko> - [<treść_commita>] (<data_i_czas>)`
-
----
-
-## 14. Komendy CLI
+## 17. Komendy CLI
 
 ```bash
-# Uruchomienie głównego interfejsu TUI (Dashboard)
+# Główny interfejs TUI (Dashboard)
 rnr
 
-# Inicjalizacja nowego projektu (Setup Wizard)
+# Inicjalizacja projektu (Setup Wizard)
 rnr init
 rnr init --force     # nadpisz istniejącą konfigurację
 
-# Wdrożenie na konkretne środowisko (otwiera TUI)
+# Wdrożenie (otwiera TUI)
 rnr deploy production
-rnr deploy staging
+rnr deploy development
 
-# Rollback do poprzedniego wdrożenia (otwiera TUI)
+# Rollback (otwiera TUI z ekranem wyboru)
 rnr rollback production
 
-# Przepchnięcie migracji bazy danych staging → production (otwiera TUI)
+# Promote migracji DB (otwiera TUI)
 rnr promote
 
-# Wyświetlenie logów ostatniego wdrożenia (terminal, bez TUI)
+# Logi wdrożeń (bez TUI)
 rnr logs
-rnr logs production       # tylko logi dla środowiska production
-rnr logs -n 100           # ostatnie 100 linii
+rnr logs production
+rnr logs -n 100
 
-# Sprawdzenie wersji narzędzia
-rnr version
+# Wersja
+rnr version        # → rnr v1.0.1
 
-# Uruchomienie z konkretnym katalogiem projektu
+# Uruchomienie w konkretnym katalogu
 rnr --dir /ścieżka/do/projektu
-
-# Wyświetlenie pomocy
-rnr --help
-rnr env --help
 ```
 
-### Skróty klawiaturowe w Dashboard TUI
+### Skróty klawiaturowe — Dashboard
 
 | Klawisz | Akcja |
 |---------|-------|
-| `D` | Wdróż na wybrane środowisko |
-| `R` | Rollback — przywróć poprzednią wersję |
-| `P` | Promote — migracje DB staging → production |
-| `L` | Otwórz przeglądarkę logów |
-| `G` | Otwórz Git Panel (status, gałęzie, historia, graf, diff) |
+| `G` | 🔧 Otwórz GitPanel (normal dev) |
+| `A` | 🚀 Otwórz Apollo (wdrożenia z guardami) |
+| `D` | Szybki deploy na wybrane środowisko |
+| `R` | Rollback — wybierz wdrożenie z historii |
+| `P` | Promote DB (development → production) |
+| `L` | Przeglądarka logów |
 | `↑ / ↓` | Zmień wybrane środowisko |
 | `Q` / `Ctrl+C` | Wyjdź z rnr |
 
+### Skróty klawiaturowe — GitPanel
+
+| Klawisz | Akcja |
+|---------|-------|
+| `1–4` / `TAB` | Zakładki (Status, Gałęzie, Historia, Graf) |
+| `SPACJA` | Zaznacz/odznacz plik do commita |
+| `a` / `A` | Zaznacz/odznacz wszystkie pliki |
+| `i` | Wpisz wiadomość commita |
+| `ENTER` (input) | Commit zaznaczonych plików |
+| `p` / `P` | Push |
+| `d` / `ENTER` (lista) | Podgląd diff pliku |
+| `↑ / ↓` lub `j / k` | Nawigacja |
+| `Q` / `ESC` | Wróć do Dashboard |
+
+### Skróty klawiaturowe — Apollo
+
+| Klawisz | Akcja |
+|---------|-------|
+| `1` / `2` | Zakładki (Przegląd, Historia) |
+| `D` | Wdróż (gdy guards OK) |
+| `R` | Rollback (wybór z listy) |
+| `P` | Promote DB |
+| `S` | Przełącz gałąź na wymaganą |
+| `F` | Force redeploy (pomija guard nowych commitów) |
+| `↑ / ↓` lub `j / k` | Środowisko / nawigacja historii |
+| `Q` / `ESC` | Wróć do Dashboard |
+
 ---
 
-### Skróty klawiaturowe w Git Panelu (styl GitKraken)
+## 18. Zarządzanie środowiskami
 
-Git Panel otwierasz z Dashboardu klawiszem **`G`**. Panel ma cztery zakładki:
+### Nazewnictwo środowisk
 
-- **[1] Status** — lista zmienionych plików, wybór pliku, podgląd `diff` i commit
-- **[2] Gałęzie** — lokalne gałęzie + `git checkout` wybranej
-- **[3] Historia** — tabela ostatnich commitów (hash, kiedy, autor, wiadomość)
-- **[4] GRAF ◈** — wizualny graf commitów w stylu GitKraken (`git log --graph --all`)
+| Środowisko | Gałąź | Skrót | Netlify |
+|------------|-------|-------|---------|
+| `production` | `master` | prod | `projekt-prod.netlify.app` |
+| `development` | `develop` | dev | `projekt-dev.netlify.app` |
 
-Najważniejsze skróty:
-
-| Kontekst | Klawisz | Akcja |
-|----------|---------|-------|
-| Dowolna zakładka | `TAB` / `1–4` | Przełącz zakładkę |
-| Dowolna zakładka | `G` / `Q` | Powrót do Dashboard |
-| Listy (pliki / gałęzie / historia / graf) | `↑ / ↓` lub `j / k` | Nawigacja po wierszach |
-| Zakładka **Status** (lista plików) | `d` / `ENTER` | Podgląd kolorowego `diff` zaznaczonego pliku |
-| Zakładka **Status** (pole commita aktywne) | `ENTER` | `git add -A && git commit` z podaną wiadomością |
-| Zakładka **Status** | `i` | Wejście w edycję wiadomości commita (focus input) |
-| Zakładka **Status** / diff | `ESC` | Wyjście z edycji / zamknięcie podglądu diff |
-| Zakładka **Gałęzie** | `ENTER` | `git checkout` zaznaczonej gałęzi |
-| Zakładka **Graf** | `↑ / ↓` lub `j / k` | Przewijanie grafu commitów (zaznaczony wiersz `▶`) |
-
-Widok **GRAF** używa znaków Unicode (`● │ ╱ ╲ ─`) i kolorów (motyw Dracula) do wizualizacji linii gałęzi, tagów i HEAD, a **diff** w zakładce Status koloruje linie dodane (`+` na zielono), usunięte (`-` na czerwono) i nagłówki hunków (`@@` na niebiesko). Git Panel odświeża się automatycznie co kilka sekund, więc nowe commity i zmiany są widoczne na bieżąco.
-
----
-
-## 15. Zarządzanie środowiskami
-
-`rnr` obsługuje wiele środowisk w jednym projekcie. Środowiska definiujesz w `rnr.conf.yaml` w sekcji `environments`.
-
-### Dodawanie nowego środowiska
+### Dodawanie środowisk
 
 ```bash
-# Dodaj środowisko lokalne
-rnr env add local
-
-# Dodaj środowisko dev
-rnr env add dev
-
-# Dodaj staging na bazie szablonu z production
-rnr env add staging --from production
-
-# Wylistuj wszystkie środowiska
-rnr env list
+rnr env add development     # branch: develop
+rnr env add local           # branch: master, bez netlify
+rnr env add preview         # branch: feature/*
+rnr env list                # wylistuj wszystkie
 ```
 
-Po uruchomieniu `rnr env add local` do `rnr.conf.yaml` zostanie dopisany blok:
-
-```yaml
-environments:
-
-  # ── LOCAL ──────────────────────────────────────────────────────────────
-  local:
-    branch: "master"
-    url: ""
-    protected: false
-
-    deploy:
-      provider: "netlify"
-      netlify_auth_token: ""   # ← uzupełnij swój token
-      netlify_site_id: ""      # ← uzupełnij Site ID dla local
-      netlify_prod: false
-
-    database:
-      provider: "none"
-
-    env:
-      NODE_ENV: "development"
-```
-
-Uzupełnij puste wartości (`netlify_auth_token`, `netlify_site_id`) i uruchom `rnr` — nowe środowisko pojawi się w Dashboard.
-
-### Inicjalizacja środowisk production i dev od razu
-
-Gdy tworzysz nowy projekt i chcesz od razu zainicjować wszystkie podstawowe środowiska:
-
-```bash
-rnr init                    # 1. Wizard skonfiguruje production
-rnr env add staging         # 2. Dodaj staging
-rnr env add local           # 3. Dodaj local (do testowania bez wdrożenia)
-```
-
-### Zalecana konfiguracja gałęzi
-
-| Środowisko | Gałąź Git | Czy chronione? |
-|------------|-----------|----------------|
-| `production` | `master` | ✅ Tak |
-| `staging` | `develop` | ❌ Nie |
-| `local` / `dev` | `master` lub `feature/*` | ❌ Nie |
-| `preview` | dowolna | ❌ Nie |
+Po dodaniu uzupełnij credentials w `rnr.conf.yaml` i uruchom `rnr`.
 
 ---
 
-## 16. Przeglądarka logów
+## 19. Przeglądarka logów
 
-`rnr` zawiera wbudowaną interaktywną przeglądarkę logów dostępną z poziomu Dashboard.
-
-### Uruchamianie
-
-W głównym Dashboard wciśnij klawisz **`L`** — otworzy się przeglądarka logów.
+W Dashboard wciśnij **`L`** — otwiera się interaktywna przeglądarka.
 
 ```
 📄 Logi wdrożeń
 ──────────────────────────────────────────────────────────────────
 ▶ production_20260310-143022.log    10.03.2026 14:30:22  12.4KB
-  staging_20260309-091500.log       09.03.2026 09:15:00   8.7KB
+  development_20260309-091500.log   09.03.2026 09:15:00   8.7KB
   rollback_production_20260308.log  08.03.2026 17:59:32   3.2KB
 
 ──────────────────────────────────────────────────────────────────
   ENTER Otwórz   ↑↓ Nawigacja   R Odśwież   ESC Dashboard
 ```
 
-### Podgląd zawartości logu
-
-Po naciśnięciu `ENTER` na wybranym pliku:
-
-```
-📄 production_20260310-143022.log
-──────────────────────────────────────────────────────────────────
-    1 │ [2026-03-10 14:30:22] ▶ ETAP: install
-    2 │ npm ci
-    3 │ ✓ Zainstalowano 247 pakietów (12.4s)
-    4 │ [2026-03-10 14:30:34] ▶ ETAP: build
-    5 │ npm run build
-    6 │ ✅ Build zakończony — dist/ (1.8MB)
-    7 │ [2026-03-10 14:30:51] ▶ ETAP: deploy
-    8 │ ✓ Netlify: wdrożono na https://mój-projekt.netlify.app
-
-──────────────────────────────────────────────────────────────────
-  ↑↓ Linia   PgUp/PgDn Strona   g/G Pocz./Koniec   ESC Lista
-```
-
-### Kolorowanie logów
-
 | Kolor | Znaczenie |
 |-------|-----------|
 | 🟢 Zielony | Sukces (`✓`, `✅`, `SUCCESS`) |
-| 🔴 Czerwony | Błąd (`✗`, `[ERROR]`) |
+| 🔴 Czerwony | Błąd (`✗`, `[ERROR]`, `panic`) |
 | 🟡 Żółty | Ostrzeżenie (`⚠`, `[WARN]`) |
 | 🔵 Niebieski | Etap potoku (`▶`, `ETAP`) |
 
-> 💡 Możesz też przeglądać logi bez TUI: `rnr logs production`
-
 ---
 
-## 17. FAQ — Często zadawane pytania
+## 20. FAQ — Często zadawane pytania
 
-**Q: Co zrobić, jeśli wdrożenie się nie powiedzie w połowie?**  
-A: Uruchom `rnr rollback --env <środowisko>` lub wybierz opcję "Rollback" w Dashboard (`R`). `rnr` przywróci kod do stanu sprzed wdrożenia.
+**Q: Co zrobić, jeśli wdrożenie się nie powiedzie?**  
+A: Apollo lub Dashboard → klawisz `R` → wybierz wdrożenie z listy → `ENTER`. `rnr` przywróci kod do wybranego stanu.
+
+**Q: Dlaczego Apollo mówi "Gałąź nieprawidłowa"?**  
+A: Apollo wymaga gałęzi `master` (production) lub `develop` (development). Naciśnij `S` w Apollo — automatycznie przełączy gałąź za Ciebie.
+
+**Q: Czym różni się GitPanel od Apollo?**  
+A: **GitPanel** (`G`) — do codziennej pracy: commity, push, checkout, podgląd historii. **Apollo** (`A`) — wyłącznie do wdrożeń, z pełną weryfikacją bezpieczeństwa i strażnikami.
 
 **Q: Czy muszę znać Git, żeby używać rnr?**  
-A: Nie! `rnr` zarządza Gitem za Ciebie. Jedyne, co musisz wiedzieć, to że przed wdrożeniem musisz zacommitować swoje zmiany (`git add . && git commit -m "opis zmian"`).
-
-**Q: Zgubił mi się token GitHub. Co teraz?**  
-A: Skontaktuj się z administratorem systemu. Możesz też wygenerować nowy token w ustawieniach GitHub (Settings → Developer Settings → Personal Access Tokens) i zaktualizować go w `rnr.conf.yaml`.
-
-**Q: Czy mogę użyć rnr bez Netlify lub Supabase?**  
-A: Tak! Możesz skonfigurować własne polecenia wdrożeniowe za pomocą `shell` provider. W `rnr.conf.yaml` zdefiniuj `deploy_cmd` z dowolnym poleceniem bash.
-
-**Q: Jak dodać nowego dewelopera do zespołu?**  
-A: Nowy deweloper klonuje repozytorium i uruchamia `rnr`. Narzędzie automatycznie wykryje że `rnr.yaml` istnieje (w repo), ale brak `rnr.conf.yaml` (gitignored) i uruchomi kreator credentials. Każdy deweloper wpisuje swoje własne tokeny.
-
-**Q: Mam tylko frontend — czy muszę konfigurować bazę danych?**  
-A: Nie! W Setup Wizard wybierz **„Brak bazy"** jako dostawcę bazy danych. `rnr` wygeneruje uproszczony pipeline bez etapu `migrate`. Nie musisz wpisywać żadnych danych Supabase/PostgreSQL.
-
-**Q: Jak dodać nowe środowisko, np. „local" lub „dev"?**  
-A: Użyj komendy `rnr env add local` lub `rnr env add dev`. Polecenie dopisze nowe środowisko do `rnr.conf.yaml` na bazie szablonu. Następnie uzupełnij credentials dla nowego środowiska i uruchom `rnr` — pojawi się w Dashboard.
-
-**Q: Co to znaczy, że repozytorium jest „brudne"?**  
-A: Oznacza to, że masz zmiany w plikach, które nie zostały jeszcze zacommitowane do Gita. `rnr` to wykryje i poprosi Cię o zacommitowanie zmian przed wdrożeniem.
-
-**Q: Gdzie mogę zobaczyć co poszło nie tak przy ostatnim wdrożeniu?**  
-A: Wciśnij `L` w Dashboard — otworzy się interaktywna przeglądarka logów. Możesz też użyć terminala: `rnr logs production`.
-
-**Q: Czy logi zawierają moje tokeny i hasła?**  
-A: Nie. `rnr` automatycznie maskuje wszystkie sekrety z `rnr.conf.yaml` w logach. W pliku logu zamiast rzeczywistego tokenu znajdziesz `***`.
+A: Nie! GitPanel i Apollo zarządzają Gitem za Ciebie. Jedyne co musisz wiedzieć: zacommituj zmiany przed wdrożeniem (GitPanel → Status → ENTER).
 
 **Q: Nie mam site ID Netlify — jak stworzyć nowy projekt?**  
-A: W Setup Wizard przy konfiguracji Netlify wybierz opcję **„✨ Utwórz nowy projekt"**. Podczas pierwszego deployu `rnr` automatycznie wywoła `netlify sites:create` i poda Ci nowe Site ID. Zapisz je w `rnr.conf.yaml → netlify_site_id` na przyszłe użycie.
+A: W Setup Wizard wybierz **„✨ Utwórz nowy projekt"**. `rnr` automatycznie wywoła `netlify sites:create` podczas pierwszego deployu i zapisze Site ID.
+
+**Q: Skąd wiem kto i kiedy wdrożył?**  
+A: Przeglądarka logów (`L`) oraz panel Apollo → zakładka Historia. Każdy rekord zawiera: autora Git, hash commita, środowisko, datę i status.
+
+**Q: Co to znaczy "repozytorium brudne"?**  
+A: Masz zmiany w plikach, które nie zostały zacommitowane. Otwórz GitPanel (`G`) → zakładka Status → zaznacz pliki → wpisz opis → ENTER.
+
+**Q: Czy logi zawierają moje tokeny?**  
+A: Nie. `rnr` automatycznie maskuje wszystkie sekrety z `rnr.conf.yaml`. W logach zamiast tokenów znajdziesz `***`.
+
+**Q: Co to jest `promote`?**  
+A: Operacja przesyłająca migracje bazy danych ze środowiska `development` do `production`. Klawisz `P` w Dashboard lub Apollo.
+
+**Q: Push odrzucony przez "non-fast-forward"?**  
+A: GitPanel pokaże ekran wyboru: `U` = `git pull --rebase + push` (zalecane) lub `F` = `push --force-with-lease`.
 
 ---
 
 ## Podziękowania
 
-`rnr` został stworzony z myślą o ludziach — nie tylko o inżynierach. Wierzymy, że narzędzia DevOps powinny być tak przyjazne i czytelne jak najlepsze aplikacje mobilne. Nikt nie powinien bać się wdrożenia.
+`rnr` został stworzony z myślą o ludziach — nie tylko o inżynierach. Wierzymy, że narzędzia DevOps powinny być tak przyjazne jak najlepsze aplikacje mobilne.
 
 Zbudowany z ❤️ przy użyciu:
 - [Go](https://golang.org/) — szybki, bezpieczny język kompilowany
@@ -999,8 +924,7 @@ Zbudowany z ❤️ przy użyciu:
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) — piękne style dla terminala
 - [Bubbles](https://github.com/charmbracelet/bubbles) — gotowe komponenty TUI
 - [Cobra](https://github.com/spf13/cobra) — framework CLI
-- [Viper](https://github.com/spf13/viper) — zarządzanie konfiguracją
 
 ---
 
-*Dokumentacja wygenerowana automatycznie przez rnr. Wersja dokumentacji: 1.0.0*
+*Dokumentacja: rnr v1.0.1*
