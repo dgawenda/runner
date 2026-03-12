@@ -2,7 +2,7 @@
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  install.sh — Skrypt Instalacyjny rnr                                  ║
 # ║                                                                          ║
-# ║  TRYB ZDALNY (domyślny) — pobiera z GitHub Releases:                   ║
+# ║  TRYB ZDALNY (domyślny) — pobiera z GitHub Releases (tag v1.0.1):      ║
 # ║    curl -fsSL https://raw.githubusercontent.com/dgawenda/runner/master/install.sh \║
 # ║      | bash -s -- --token ghp_TWOJ_TOKEN                               ║
 # ║                                                                          ║
@@ -13,7 +13,7 @@
 # ║  Opcje:                                                                  ║
 # ║    --token TOKEN    GitHub Personal Access Token                        ║
 # ║    --repo  REPO     Repozytorium GitHub (domyślnie: dgawenda/runner)    ║
-# ║    --tag   TAG      Wersja (domyślnie: najnowsza lub v1.0.0 lokalnie)  ║
+# ║    --tag   TAG      Wersja (domyślnie: v1.0.1 lub latest przy nadpis.)  ║
 # ║    --dir   DIR      Katalog instalacji (domyślnie: .rnr/)               ║
 # ║    --local          Instaluj z lokalnej binarki (bez GitHub)            ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
@@ -35,7 +35,9 @@ NC='\033[0m'
 
 GITHUB_TOKEN="${RNR_GITHUB_TOKEN:-}"
 GITHUB_REPO="${RNR_REPO:-dgawenda/runner}"
-RELEASE_TAG="${RNR_VERSION:-latest}"
+# Domyślnie instalujemy z konkretnego taga v1.0.1, żeby uniknąć pobierania
+# starej binarki jeśli 'latest' na GitHubie wskazuje inną wersję.
+RELEASE_TAG="${RNR_VERSION:-v1.0.1}"
 INSTALL_DIR="${RNR_INSTALL_DIR:-.rnr}"
 BINARY_NAME="rnr"
 LOCAL_MODE=false

@@ -162,7 +162,7 @@ Nowe narzędzie powinno działać od razu po instalacji. Setup Wizard prowadzi p
 
 ### 🛡️ Safety-First — bezpieczeństwo na pierwszym miejscu
 
-Każde wdrożenie w Apollo jest poprzedzone **weryfikacją 6 strażników**. Jeśli cokolwiek jest nie tak, `rnr` zablokuje deployment i wyjaśni dokładnie co trzeba naprawić.
+Każde wdrożenie w ReleasePanel (Apollo) jest poprzedzone **weryfikacją 6 strażników**. Jeśli cokolwiek jest nie tak, `rnr` zablokuje deployment i wyjaśni dokładnie co trzeba naprawić.
 
 ### 🔮 GitOps — Git jako źródło prawdy
 
@@ -170,23 +170,20 @@ Każda operacja wdrożeniowa jest utrwalana w historii Git. `rnr` tworzy gałęz
 
 ---
 
-## 5. Architektura trybów — Dashboard, GitPanel, Apollo
+## 5. Architektura trybów — Dashboard, GitPanel, ReleasePanel
 
 `rnr` dzieli się na trzy podnarzędzia dostępne z głównego Dashboard:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  ⚡ rnr / projekt  [G GitPanel]  [A Apollo]    02.01 14:30  │
+│  ⚡ rnr / projekt  [G GitPanel]  [A ReleasePanel]  02.01 14:30 │
 ├─────────────────────────────────────────────────────────────┤
 │  Dashboard — centrum dowodzenia                             │
 │  Wybierz tryb operacyjny:                                   │
 │                                                              │
-│  [G]  🔧 GitPanel  — operacje Git (commit, push, checkout)  │
-│  [A]  🚀 Apollo    — wdrożenia z pełną ochroną              │
-│  [D]  Wdróż (szybka ścieżka, bez guardów)                  │
-│  [R]  Rollback — wybierz wdrożenie z historii              │
-│  [P]  Promote DB (development → production)                 │
-│  [L]  Logi wdrożeń                                          │
+│  [G]  🔧 GitPanel     — operacje Git (commit, push, checkout) │
+│  [A]  🚀 ReleasePanel — wdrożenia z pełną ochroną             │
+│  [L]  Logi wdrożeń                                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -194,7 +191,7 @@ Każda operacja wdrożeniowa jest utrwalana w historii Git. `rnr` tworzy gałęz
 
 Otwierasz klawiszem **`G`** z Dashboard. Pełna kontrola repozytorium bez opuszczania terminala. Zamykasz klawiszem **`Q`** lub **`ESC`**.
 
-### 🚀 Apollo — wyłącznie do wdrożeń
+### 🚀 ReleasePanel (Apollo) — wyłącznie do wdrożeń
 
 Otwierasz klawiszem **`A`** z Dashboard. Wymaga gałęzi roboczych. Chroniony przez 6 strażników. Zamykasz klawiszem **`Q`** lub **`ESC`**.
 
@@ -224,6 +221,7 @@ GitPanel ma cztery zakładki:
 | **Status** — lista plików | `a / A` | Zaznacz wszystkie / odznacz wszystkie |
 | **Status** — lista plików | `d` / `ENTER` | Podgląd kolorowego `diff` zaznaczonego pliku |
 | **Status** — lista plików | `i` | Wejście w edycję wiadomości commita |
+| **Status** — lista plików | `m` / `M` | Wygeneruj automatyczny opis commita na podstawie zmian |
 | **Status** — input commita | `ENTER` | `git add <wybrane> && git commit` |
 | **Status** — input commita | `ESC` | Wyjście z edycji |
 | **Status** | `p` / `P` | `git push origin <branch>` |
@@ -235,6 +233,13 @@ GitPanel ma cztery zakładki:
 ### Wybór plików do commita
 
 W zakładce **Status** każdy plik ma checkbox `[ ]` lub `[✓]`. Zaznacz konkretne pliki spacją lub użyj `a` dla wszystkich. Przy commicie `rnr` wykona `git add <tylko_zaznaczone>`.
+
+### Auto commit message (GitPanel)
+
+W zakładce **Status**, gdy repozytorium ma zmiany:
+- naciśnij **`m`** aby wygenerować automatyczny opis commita na podstawie listy zmienionych plików i aktualnej daty, np.  
+  `chore: update app/main.go, pkg/tui/model.go and 3 more files (2026-03-12 14:05)`
+- opis pojawia się w polu commita, możesz go **edytować** przed naciśnięciem `ENTER`.
 
 ### Obsługa konfliktów push (non-fast-forward)
 
@@ -265,25 +270,25 @@ Kolory: `●` fiolet = commit HEAD, `│╱╲` grafit = linie, `⎇` cyjan = ga
 
 ---
 
-## 7. Apollo — Panel Wdrożeń z Guardami
+## 7. ReleasePanel (Apollo) — Panel Wdrożeń z Guardami
 
 > Tryb wdrożeń z maksymalnym bezpieczeństwem. Otwórz klawiszem `A`.
 
 ```
-🚀 Apollo — Panel Wdrożeń  (Q = wróć do Dashboard)
-⚡ Tryb Apollo: wdrożenia wyłącznie z gałęzi roboczych (master/develop) · wszystkie operacje są chronione strażnikami
+🚀 ReleasePanel — Panel Wdrożeń  (Q = wróć do Dashboard)
+⚡ Tryb Apollo/ReleasePanel: wdrożenia wyłącznie z gałęzi roboczych (master/develop) · wszystkie operacje są chronione strażnikami
 ──────────────────────────────────────────────────────────────
  1 PRZEGLĄD    2 HISTORIA
 ```
 
-### Zakładki Apollo
+### Zakładki ReleasePanel
 
 | Zakładka | Opis |
 |----------|------|
 | **[1] PRZEGLĄD** | Selektor środowisk + wyniki strażników + przyciski akcji |
 | **[2] HISTORIA** | Historia wdrożeń ze statusami, autorami i haszami commitów |
 
-### Skróty klawiaturowe — Apollo
+### Skróty klawiaturowe — ReleasePanel
 
 | Klawisz | Akcja |
 |---------|-------|
