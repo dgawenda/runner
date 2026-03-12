@@ -118,10 +118,10 @@ func (m DashboardModel) renderTopBar(w int) string {
 	gitBtn := lipgloss.NewStyle().
 		Foreground(ColorBg).Background(ColorSecondary).
 		Padding(0, 1).Bold(true).Render("G GitPanel")
-	apolloBtn := lipgloss.NewStyle().
+	releaseBtn := lipgloss.NewStyle().
 		Foreground(ColorBg).Background(ColorApollo).
-		Padding(0, 1).Bold(true).Render("A Apollo")
-	modes := gitBtn + " " + apolloBtn
+		Padding(0, 1).Bold(true).Render("A ReleasePanel")
+	modes := gitBtn + " " + releaseBtn
 
 	// Prawa strona — czas
 	timeStr := lipgloss.NewStyle().Foreground(ColorMuted).
@@ -326,15 +326,10 @@ func (m DashboardModel) renderHistoryBlock(w int) string {
 // ─── Key Bar ──────────────────────────────────────────────────────────────
 
 func (m DashboardModel) renderKeyBar(w int) string {
-	selectedEnv := m.SelectedEnv()
 	bindings := []KeyBinding{
 		{"G", "GitPanel 🔧"},
-		{"A", "Apollo 🚀"},
-		{"D", "Wdróż " + selectedEnv},
-		{"R", "Rollback"},
-		{"P", "Promote DB"},
+		{"A", "ReleasePanel 🚀"},
 		{"L", "Logi"},
-		{"↑↓", "Środowisko"},
 		{"Q", "Wyjdź"},
 	}
 	return "\n" + KeyBar(bindings, w)
