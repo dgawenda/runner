@@ -100,6 +100,9 @@ type GitPanelModel struct {
 
 	// Auto commit message (ostatnio wygenerowany)
 	autoCommitGenerated bool
+
+	// Typ commita dla auto-opisu (feat/fix/refactor/chore)
+	commitTypeIndex int
 }
 
 func NewGitPanelModel(width, height int) GitPanelModel {
@@ -111,9 +114,10 @@ func NewGitPanelModel(width, height int) GitPanelModel {
 	return GitPanelModel{
 		width:       width,
 		height:      height,
-		tab:         GitTabStatus,
-		commitInput: ti,
-		stagedFiles: make(map[string]bool),
+		tab:             GitTabStatus,
+		commitInput:     ti,
+		stagedFiles:     make(map[string]bool),
+		commitTypeIndex: 0, // domyślnie "feat"
 	}
 }
 
@@ -435,10 +439,51 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 				return m, func() tea.Msg { return GitDiffRequestMsg{File: file} }
 			}
 
+		case "t", "T":
+			// [t] — zmień typ commita dla auto-opisu
+			if m.tab == GitTabStatus {
+				m.commitTypeIndex = (m.commitTypeIndex + 1) % 4
+				types := []string{"feat", "fix", "refactor", "chore"}
+				ct := types[m.commitTypeIndex]
+				m.statusMsg = fmt.Sprintf("Typ commita ustawiony na: %s", ct)
+				m.statusErr = false
+			}
+			return m, tea.Batch(cmds...)
+
 		case "m", "M":
 			// [m] — wygeneruj automatyczną wiadomość commita na podstawie zmian
 			if m.tab == GitTabStatus && m.gitStatus != nil && !m.gitStatus.IsClean {
-				msg := gitops.GenerateAutoCommitMessage(m.gitStatus.DirtyFiles, time.Now())
+				ctypes := []string{"feat", "fix", "refactor", "chore"}
+				ct := ctypes[m.commitTypeIndex%len(ctypes)]
+
+				gs := m.gitStatus
+				branch := gs.Branch
+				if branch == "" {
+					branch = "HEAD"
+				}
+
+				author := gs.LastCommit.Author
+				if author == "" {
+					author = "unknown"
+				}
+				email := gs.LastCommit.AuthorEmail
+				if email == "" {
+					email = "unknown@example.com"
+				}
+
+				fileCount := len(gs.DirtyFiles)
+				now := time.Now()
+
+				msg := fmt.Sprintf(
+					"%s(%s): %s <%s> — %d plik(ów) (%s)",
+					ct,
+					branch,
+					author,
+					email,
+					fileCount,
+					now.Format("2006-01-02 15:04"),
+				)
+
 				m.commitInput.SetValue(msg)
 				m.autoCommitGenerated = true
 				m.statusMsg = "✎ Wygenerowano automatyczny opis commita — możesz go edytować przed ENTER"
@@ -735,7 +780,9 @@ func (m GitPanelModel) renderStatusTab(w int) string {
 		if m.commitInput.Focused() {
 			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("✎  Wiadomość commita [ESC anuluj]:"))
 		} else {
-			hints := "[i] Napisz commit    [m] Auto opis    [p] Push"
+			commitTypes := []string{"feat", "fix", "refactor", "chore"}
+			ct := commitTypes[m.commitTypeIndex%len(commitTypes)]
+			hints := fmt.Sprintf("[i] Napisz commit    [m] Auto opis    [t] Typ (%s)    [p] Push", ct)
 			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorSubtext).Render("  "+hints))
 		}
 		rows = append(rows, "  "+m.commitInput.View())
