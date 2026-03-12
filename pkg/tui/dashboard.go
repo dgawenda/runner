@@ -224,9 +224,77 @@ func (m DashboardModel) renderGitCard(w int) string {
 // ─── Środowiska + Historia ────────────────────────────────────────────────
 
 func (m DashboardModel) renderEnvAndHistory(w int) string {
-	envBlock := m.renderEnvBlock(w)
+	repoBlock := m.renderRepoSummary(w)
 	histBlock := m.renderHistoryBlock(w)
-	return "\n" + envBlock + "\n" + histBlock
+	return "\n" + repoBlock + "\n" + histBlock
+}
+
+// renderRepoSummary wyświetla podsumowanie repozytorium (remote + ahead/behind).
+func (m DashboardModel) renderRepoSummary(w int) string {
+	header := SectionHeader("⮃", "Synchronizacja repozytorium:", w-2)
+
+	if m.gitStatus == nil {
+		return header + "\n " + StyleInfo.Render("⟳  Ładowanie statusu Git...") + "\n"
+	}
+
+	gs := m.gitStatus
+	var rows []string
+	rows = append(rows, header)
+
+	// Remote
+	if gs.HasRemote {
+		remoteShort := gs.RemoteURL
+		if len(remoteShort) > 60 {
+			remoteShort = "…" + remoteShort[len(remoteShort)-57:]
+		}
+		rows = append(rows, "  "+StyleMuted.Render("🔗 "+remoteShort))
+	} else {
+		rows = append(rows,
+			"  "+StyleWarning.Render("⚠  Brak remote origin — push niedostępny"),
+			"  "+StyleMuted.Render("   Dodaj: git remote add origin <URL>"),
+		)
+	}
+
+	// Gałąź
+	rows = append(rows,
+		"  "+StyleLabel.Render("Gałąź: ")+
+			lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("⎇ "+gs.Branch),
+	)
+
+	// Ahead / Behind
+	if gs.HasRemote {
+		if gs.HasUpstream {
+			switch {
+			case gs.Ahead == 0 && gs.Behind == 0:
+				rows = append(rows,
+					"  "+StyleSuccess.Render("⮃ Gałąź zsynchronizowana z origin"),
+				)
+			default:
+				var parts []string
+				if gs.Ahead > 0 {
+					parts = append(parts,
+						lipgloss.NewStyle().Foreground(ColorSuccess).
+							Render(fmt.Sprintf("↑ %d lokalnych", gs.Ahead)),
+					)
+				}
+				if gs.Behind > 0 {
+					parts = append(parts,
+						lipgloss.NewStyle().Foreground(ColorWarning).
+							Render(fmt.Sprintf("↓ %d do pobrania", gs.Behind)),
+					)
+				}
+				rows = append(rows,
+					"  "+StyleMuted.Render("⮃ "+strings.Join(parts, "  ")),
+				)
+			}
+		} else {
+			rows = append(rows,
+				"  "+StyleMuted.Render("⮃ Brak upstream — pierwszy push ustawi śledzenie (origin/"+gs.Branch+")"),
+			)
+		}
+	}
+
+	return strings.Join(rows, "\n")
 }
 
 func (m DashboardModel) renderEnvBlock(w int) string {

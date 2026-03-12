@@ -435,7 +435,6 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 				return m, func() tea.Msg { return GitDiffRequestMsg{File: file} }
 			}
 
-		case "enter":
 		case "m", "M":
 			// [m] — wygeneruj automatyczną wiadomość commita na podstawie zmian
 			if m.tab == GitTabStatus && m.gitStatus != nil && !m.gitStatus.IsClean {
@@ -445,6 +444,10 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 				m.statusMsg = "✎ Wygenerowano automatyczny opis commita — możesz go edytować przed ENTER"
 				m.statusErr = false
 			}
+			// nie wykonuj dalej żadnych akcji (np. diff)
+			return m, tea.Batch(cmds...)
+
+		case "enter":
 			switch m.tab {
 			case GitTabStatus:
 				if m.gitStatus != nil && !m.gitStatus.IsClean && len(m.gitStatus.DirtyFiles) > 0 {
