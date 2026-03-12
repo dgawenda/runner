@@ -68,10 +68,19 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	}
 
 	// ── Tryb: utwórz nowy projekt przez Netlify REST API ────────────────
-	if d.NetlifyCreateNew && d.NetlifySiteID == "" {
+	// Standardowo dzieje się to gdy netlify_create_new: true i brak site_id.
+	// Dodatkowo, jeśli site_id jest puste, a mamy token, spróbujemy fallbacku,
+	// nawet jeśli flaga nie została ustawiona (bardziej odporne na błędy konfigu).
+	if d.NetlifySiteID == "" && d.NetlifyAuthToken != "" {
+		if d.NetlifyCreateNew {
+			send(outputCh, "✨ Netlify: netlify_site_id puste i netlify_create_new=true — tworzę nowy projekt…")
+		} else {
+			send(outputCh, "✨ Netlify: brak netlify_site_id, ale jest token — tworzenie nowego projektu (fallback)…")
+		}
+
 		siteID, err := p.createSiteViaAPI(d.NetlifyAuthToken, env.ProjectName, outputCh)
 		if err != nil {
-			return err
+			return fmt.Errorf("nie udało się automatycznie utworzyć projektu Netlify: %w", err)
 		}
 		d.NetlifySiteID = siteID
 
@@ -95,7 +104,7 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 				"Opcje:\n" +
 				"  1. Wpisz Site ID w rnr.conf.yaml → environments.X.deploy.netlify_site_id\n" +
 				"     (znajdziesz go w Netlify → Site settings → General → Site ID)\n" +
-				"  2. Ustaw netlify_create_new: true aby rnr automatycznie założył projekt",
+				"  2. Upewnij się, że netlify_auth_token jest poprawny — rnr próbuje automatycznie tworzyć projekty, gdy site_id jest puste.",
 		)
 	}
 
