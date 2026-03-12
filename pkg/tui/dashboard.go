@@ -1,13 +1,7 @@
 // file: pkg/tui/dashboard.go
 //
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║  Dashboard Główny — Centrum Dowodzenia Wdrożeń                     ║
-// ║                                                                      ║
-// ║  Wyświetla:                                                         ║
-// ║    · Status Git (gałąź, ostatni commit, czystość repozytorium)     ║
-// ║    · Selektor środowisk (strzałki ↑↓)                              ║
-// ║    · Historię ostatnich wdrożeń                                    ║
-// ║    · Skróty klawiszowe do wszystkich operacji                      ║
+// ║  Dashboard Główny — Centrum Dowodzenia                             ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 package tui
@@ -26,50 +20,38 @@ import (
 
 // ─── Model Dashboardu ─────────────────────────────────────────────────────
 
-// DashboardModel to model głównego panelu sterowania.
 type DashboardModel struct {
-	width      int
-	height     int
-	cfg        *config.Config
-	gitStatus  *gitops.StatusResult
-	stateData  *state.State
-	envNames   []string
+	width       int
+	height      int
+	cfg         *config.Config
+	gitStatus   *gitops.StatusResult
+	stateData   *state.State
+	envNames    []string
 	selectedEnv int
 }
 
-// NewDashboardModel tworzy nowy model dashboardu.
 func NewDashboardModel(width, height int, cfg *config.Config, gitStatus *gitops.StatusResult, stateData *state.State) DashboardModel {
-	envNames := cfg.GetEnvironmentNames()
-
 	return DashboardModel{
 		width:     width,
 		height:    height,
 		cfg:       cfg,
 		gitStatus: gitStatus,
 		stateData: stateData,
-		envNames:  envNames,
+		envNames:  cfg.GetEnvironmentNames(),
 	}
 }
 
-// ─── Interfejs Bubble Tea ─────────────────────────────────────────────────
+func (m DashboardModel) Init() tea.Cmd { return nil }
 
-// Init inicjalizuje model dashboardu.
-func (m DashboardModel) Init() tea.Cmd {
-	return nil
-}
-
-// Update obsługuje zdarzenia dashboardu.
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
 	case GitStatusMsg:
 		if msg.Err == nil {
 			m.gitStatus = msg.Result
 		}
-
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
@@ -85,7 +67,6 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	return m, nil
 }
 
-// SelectedEnv zwraca nazwę aktualnie wybranego środowiska.
 func (m DashboardModel) SelectedEnv() string {
 	if len(m.envNames) == 0 {
 		return ""
@@ -98,29 +79,24 @@ func (m DashboardModel) SelectedEnv() string {
 
 // ─── Widok ────────────────────────────────────────────────────────────────
 
-// View renderuje dashboard.
 func (m DashboardModel) View() string {
 	if m.width < 40 {
-		return "Terminal zbyt wąski — rozszerz okno do min. 40 znaków."
+		return "Terminal zbyt wąski (min. 40 znaków)"
 	}
+	w := min(m.width, 96)
 
-	// Maksymalna szerokość zawartości
-	contentW := min(m.width-2, 90)
+	var rows []string
+	rows = append(rows, m.renderTopBar(w))
+	rows = append(rows, m.renderGitCard(w))
+	rows = append(rows, m.renderEnvAndHistory(w))
+	rows = append(rows, m.renderKeyBar(w))
 
-	sections := []string{
-		m.renderHeader(contentW),
-		m.renderGitStatus(contentW),
-		m.renderEnvSelector(contentW),
-		m.renderHistory(contentW),
-		m.renderKeyBindings(contentW),
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return strings.Join(rows, "\n")
 }
 
-// ─── Sekcje Widoku ────────────────────────────────────────────────────────
+// ─── Top bar ─────────────────────────────────────────────────────────────
 
-func (m DashboardModel) renderHeader(width int) string {
+func (m DashboardModel) renderTopBar(w int) string {
 	projectName := ""
 	projectVersion := ""
 	if m.cfg != nil && m.cfg.Pipeline != nil {
@@ -128,102 +104,133 @@ func (m DashboardModel) renderHeader(width int) string {
 		projectVersion = m.cfg.Pipeline.Project.Version
 	}
 
-	left := StyleTitle.Render("⚡ rnr")
+	// Lewa strona — logo + projekt
+	left := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("⚡ rnr")
 	if projectName != "" {
-		left += StyleMuted.Render(" / ") + StyleBold.Render(projectName)
+		left += lipgloss.NewStyle().Foreground(ColorMuted).Render(" / ")
+		left += lipgloss.NewStyle().Foreground(ColorText).Bold(true).Render(projectName)
 	}
 	if projectVersion != "" {
-		left += StyleMuted.Render(" v"+projectVersion)
+		left += lipgloss.NewStyle().Foreground(ColorMuted).Render("  " + projectVersion)
 	}
 
-	// Wskaźnik trybów — pomoc kontekstowa
-	gitMode := lipgloss.NewStyle().
+	// Przyciski trybów
+	gitBtn := lipgloss.NewStyle().
 		Foreground(ColorBg).Background(ColorSecondary).
 		Padding(0, 1).Bold(true).Render("G GitPanel")
-	apolloMode := lipgloss.NewStyle().
-		Foreground(ColorBg).Background(lipgloss.Color("#FF79C6")).
+	apolloBtn := lipgloss.NewStyle().
+		Foreground(ColorBg).Background(ColorApollo).
 		Padding(0, 1).Bold(true).Render("A Apollo")
-	modeLine := gitMode + " " + apolloMode
-	left += "   " + modeLine
+	modes := gitBtn + " " + apolloBtn
 
-	right := StyleMuted.Render(time.Now().Format("02.01.2006 15:04") + "  ⟳ live")
+	// Prawa strona — czas
+	timeStr := lipgloss.NewStyle().Foreground(ColorMuted).
+		Render(time.Now().Format("02.01.2006 15:04") + "  ⟳ live")
 
-	header := lipgloss.NewStyle().
-		Width(width).
-		Padding(0, 1).
+	leftFull := left + "   " + modes
+	leftW := w - lipgloss.Width(timeStr) - 2
+	if leftW < 0 {
+		leftW = 0
+	}
+
+	topLine := lipgloss.NewStyle().Width(w).
+		Background(ColorBgAlt).Padding(0, 1).
 		Render(lipgloss.JoinHorizontal(lipgloss.Top,
-			lipgloss.NewStyle().Width(width-len(right)-2).Render(left),
-			right,
+			lipgloss.NewStyle().Width(leftW).Render(leftFull),
+			timeStr,
 		))
 
-	return header + "\n" + Divider(width)
+	divLine := lipgloss.NewStyle().Foreground(ColorPrimary).Render(repeatChar("━", w))
+	return topLine + "\n" + divLine
 }
 
-func (m DashboardModel) renderGitStatus(width int) string {
+// ─── Karta Git Status ─────────────────────────────────────────────────────
+
+func (m DashboardModel) renderGitCard(w int) string {
 	if m.gitStatus == nil {
-		return lipgloss.NewStyle().Padding(0, 2).Render(
-			StyleInfo.Render("⟳  Ładowanie statusu Git..."),
-		)
+		return "\n " + StyleInfo.Render("⟳  Ładowanie statusu Git...") + "\n"
 	}
 
 	gs := m.gitStatus
-	var lines []string
+	inner := w - 4
 
-	// Gałąź i ostatni commit
-	branchLine := lipgloss.JoinHorizontal(lipgloss.Top,
-		StyleLabel.Render("  Gałąź:     "),
-		lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("⎇  "+gs.Branch),
-	)
-	lines = append(lines, branchLine)
+	var rows []string
 
-	if gs.LastCommit.Hash != "" && gs.LastCommit.Hash != "0000000000000000000000000000000000000000" {
-		commitLine := lipgloss.JoinHorizontal(lipgloss.Top,
-			StyleLabel.Render("  Commit:    "),
-			lipgloss.NewStyle().Foreground(ColorMuted).Render(gs.LastCommit.ShortHash+" "),
-			StyleValue.Render(truncateStr(gs.LastCommit.Message, width-32)),
-		)
-		authorLine := lipgloss.JoinHorizontal(lipgloss.Top,
-			StyleLabel.Render("  Autor:     "),
-			StyleMuted.Render(gs.LastCommit.Author),
-			StyleMuted.Render(" · "+gs.LastCommit.RelativeDate),
-		)
-		lines = append(lines, commitLine, authorLine)
-	}
+	// Wiersz 1: gałąź + status
+	branchBadge := lipgloss.NewStyle().
+		Foreground(ColorBg).Background(ColorSecondary).
+		Bold(true).Padding(0, 1).Render("⎇  " + gs.Branch)
 
-	// Status czystości
-	var statusLine string
+	var statusBadge string
 	if gs.IsClean {
-		statusLine = lipgloss.JoinHorizontal(lipgloss.Top,
-			StyleLabel.Render("  Status:    "),
-			StyleSuccess.Render("✅ Repozytorium czyste — gotowe do wdrożenia"),
-		)
+		statusBadge = lipgloss.NewStyle().
+			Foreground(ColorBg).Background(ColorSuccess).
+			Padding(0, 1).Render("✓ czyste")
 	} else {
-		statusLine = lipgloss.JoinHorizontal(lipgloss.Top,
-			StyleLabel.Render("  Status:    "),
-			StyleWarning.Render(fmt.Sprintf("⚠️  Niezatwierdzone zmiany (%d pliki)", len(gs.DirtyFiles))),
-		)
-		lines = append(lines, statusLine)
-		// Pokaż kilka brudnych plików
-		for i, f := range gs.DirtyFiles {
-			if i >= 3 {
-				lines = append(lines, StyleMuted.Render(fmt.Sprintf("    ... i %d więcej", len(gs.DirtyFiles)-3)))
-				break
-			}
-			lines = append(lines, StyleMuted.Render(fmt.Sprintf("    [%s] %s", strings.TrimSpace(f.Status), f.Path)))
+		statusBadge = lipgloss.NewStyle().
+			Foreground(ColorBg).Background(ColorWarning).
+			Padding(0, 1).Render(fmt.Sprintf("⚠ %d zmian", len(gs.DirtyFiles)))
+	}
+
+	rows = append(rows, "  "+branchBadge+"  "+statusBadge)
+
+	// Wiersz 2: ostatni commit
+	if gs.LastCommit.Hash != "" && gs.LastCommit.Hash != "0000000000000000000000000000000000000000" {
+		hashPart := lipgloss.NewStyle().Foreground(ColorMuted).Render(gs.LastCommit.ShortHash)
+		msgPart := lipgloss.NewStyle().Foreground(ColorText).Render(truncateStr(gs.LastCommit.Message, inner-40))
+		authorPart := lipgloss.NewStyle().Foreground(ColorMuted).Render("  " + gs.LastCommit.Author + " · " + gs.LastCommit.RelativeDate)
+		rows = append(rows, "  "+hashPart+"  "+msgPart+authorPart)
+	}
+
+	// Brudne pliki (kilka)
+	if !gs.IsClean {
+		shown := gs.DirtyFiles
+		extra := 0
+		if len(shown) > 4 {
+			extra = len(shown) - 4
+			shown = shown[:4]
 		}
-		statusLine = "" // Już dodane powyżej
+		for _, f := range shown {
+			icon, sty := gitFileIcon(f.Status)
+			rows = append(rows,
+				"    "+sty.Render(fmt.Sprintf("[%s]", strings.TrimSpace(f.Status)))+" "+icon+"  "+
+					lipgloss.NewStyle().Foreground(ColorSubtext).Render(f.Path),
+			)
+		}
+		if extra > 0 {
+			rows = append(rows, "    "+StyleMuted.Render(fmt.Sprintf("... i %d więcej", extra)))
+		}
 	}
 
-	if statusLine != "" {
-		lines = append(lines, statusLine)
+	content := strings.Join(rows, "\n")
+
+	borderColor := ColorSurface
+	if !gs.IsClean {
+		borderColor = ColorWarning
+	} else if gs.IsClean {
+		borderColor = ColorSuccess
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
-	return "\n" + content + "\n"
+	card := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(w - 2).
+		Padding(0, 1).
+		Render(content)
+
+	return "\n" + card
 }
 
-func (m DashboardModel) renderEnvSelector(width int) string {
-	title := StyleLabel.Padding(0, 2).Render("Środowisko:")
+// ─── Środowiska + Historia ────────────────────────────────────────────────
+
+func (m DashboardModel) renderEnvAndHistory(w int) string {
+	envBlock := m.renderEnvBlock(w)
+	histBlock := m.renderHistoryBlock(w)
+	return "\n" + envBlock + "\n" + histBlock
+}
+
+func (m DashboardModel) renderEnvBlock(w int) string {
+	header := SectionHeader("🌍", "Środowisko:", w-2)
 
 	var rows []string
 	for i, env := range m.envNames {
@@ -234,125 +241,112 @@ func (m DashboardModel) renderEnvSelector(width int) string {
 
 		isSelected := i == m.selectedEnv
 
-		// Ikona zaznaczenia
-		prefix := "    ○  "
+		// Ikona kursora
+		var cursor string
 		if isSelected {
-			prefix = lipgloss.NewStyle().Foreground(ColorPrimary).Render("  ▶ ●  ")
+			cursor = lipgloss.NewStyle().Foreground(ColorApollo).Bold(true).Render("▶ ")
+		} else {
+			cursor = "  "
 		}
 
-		// Badge środowiska
 		badge := EnvBadge(env)
-
-		// Informacje o środowisku
 		branch := envCfg.Branch
 		if branch == "" {
-			branch = "(nie ustawiono)"
+			branch = "auto"
 		}
-		info := StyleMuted.Render("  gałąź: " + branch)
+		branchStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("  ⎇ " + branch)
 
-		// Ostatnie wdrożenie
-		var lastDeploy string
+		var extras []string
+		if envCfg.Protected {
+			extras = append(extras, lipgloss.NewStyle().Foreground(ColorWarning).Render("🔒 chronione"))
+		}
 		if m.stateData != nil {
 			if last := m.stateData.GetLastSuccessful(env); last != nil {
-				lastDeploy = StyleMuted.Render(" · ostatnie: " + last.StartedAt.Format("02.01 15:04"))
+				extras = append(extras, lipgloss.NewStyle().Foreground(ColorMuted).
+					Render("ostatnie: "+last.StartedAt.Format("02.01 15:04")))
 			}
 		}
 
-		// Ochrona środowiska
-		var protectedBadge string
-		if envCfg.Protected {
-			protectedBadge = lipgloss.NewStyle().
-				Foreground(ColorWarning).
-				Render(" 🔒 chronione")
+		extrasStr := ""
+		if len(extras) > 0 {
+			extrasStr = "  " + strings.Join(extras, "  ")
 		}
 
-		var row string
+		row := cursor + badge + branchStr + extrasStr
 		if isSelected {
 			row = lipgloss.NewStyle().
 				Background(lipgloss.Color("#2A2A3E")).
-				Width(width - 2).
-				Render(prefix + badge + info + lastDeploy + protectedBadge)
-		} else {
-			row = prefix + badge + info + lastDeploy + protectedBadge
+				Width(w - 4).
+				Padding(0, 1).
+				Render(row)
 		}
-		rows = append(rows, row)
+		rows = append(rows, " "+row)
 	}
 
-	return "\n" + title + "\n" + strings.Join(rows, "\n") + "\n"
+	return header + "\n" + strings.Join(rows, "\n")
 }
 
-func (m DashboardModel) renderHistory(width int) string {
+func (m DashboardModel) renderHistoryBlock(w int) string {
 	if m.stateData == nil || len(m.stateData.Deployments) == 0 {
-		return "\n" + StyleMuted.Padding(0, 2).Render("Brak historii wdrożeń") + "\n"
+		return " " + StyleMuted.Render("Brak historii wdrożeń")
 	}
 
-	title := StyleLabel.Padding(0, 2).Render("Ostatnie wdrożenia:")
+	header := SectionHeader("📋", "Ostatnie wdrożenia:", w-2)
 	var rows []string
 
-	deployments := m.stateData.GetLastN("", 4)
-	for _, d := range deployments {
-		var statusIcon string
+	for _, d := range m.stateData.GetLastN("", 4) {
+		var icon string
 		switch d.Status {
 		case state.StatusSuccess:
-			statusIcon = StyleSuccess.Render("✓")
+			icon = StyleSuccess.Render("✓")
 		case state.StatusFailed:
-			statusIcon = StyleError.Render("✗")
+			icon = StyleError.Render("✗")
 		case state.StatusRolledBack:
-			statusIcon = StyleWarning.Render("↩")
+			icon = StyleWarning.Render("↩")
 		default:
-			statusIcon = StyleInfo.Render("⟳")
+			icon = StyleInfo.Render("⟳")
 		}
 
-		envBadge := EnvBadge(d.Env)
 		shortHash := d.CommitHash
 		if len(shortHash) > 7 {
 			shortHash = shortHash[:7]
 		}
 
-		timeStr := d.StartedAt.Format("02.01 15:04")
-		msg := truncateStr(d.CommitMessage, width-50)
+		envStr := EnvStyle(d.Env).Render(fmt.Sprintf("%-12s", d.Env))
+		hashStr := lipgloss.NewStyle().Foreground(ColorInfo).Render(fmt.Sprintf("%-8s", shortHash))
+		timeStr := lipgloss.NewStyle().Foreground(ColorMuted).Render(fmt.Sprintf("%-12s", d.StartedAt.Format("02.01 15:04")))
+		msgStr := lipgloss.NewStyle().Foreground(ColorSubtext).Render(truncateStr(d.CommitMessage, w-50))
 
-		row := fmt.Sprintf("  %s  %s  %s  %s  %s",
-			statusIcon, envBadge, StyleMuted.Render(shortHash),
-			StyleMuted.Render(timeStr), StyleValue.Render(msg))
-		rows = append(rows, row)
+		rows = append(rows, "  "+icon+"  "+envStr+"  "+hashStr+"  "+timeStr+"  "+msgStr)
 	}
 
-	return "\n" + title + "\n" + strings.Join(rows, "\n") + "\n"
+	return header + "\n" + strings.Join(rows, "\n")
 }
 
-func (m DashboardModel) renderKeyBindings(width int) string {
-	_ = width
+// ─── Key Bar ──────────────────────────────────────────────────────────────
 
+func (m DashboardModel) renderKeyBar(w int) string {
 	selectedEnv := m.SelectedEnv()
-	var bindings []string
-
-	bindings = append(bindings,
-		keyBind("G", "GitPanel 🔧"),
-		keyBind("A", "Apollo 🚀"),
-		keyBind("D", "Wdróż "+selectedEnv),
-		keyBind("R", "Rollback"),
-		keyBind("P", "Promote DB"),
-		keyBind("L", "Logi"),
-		keyBind("↑↓", "Środowisko"),
-		keyBind("Q", "Wyjdź"),
-	)
-
-	divider := Divider(width)
-	row := strings.Join(bindings, "  ")
-
-	return "\n" + divider + "\n" + lipgloss.NewStyle().Padding(0, 2).Render(row) + "\n"
+	bindings := []KeyBinding{
+		{"G", "GitPanel 🔧"},
+		{"A", "Apollo 🚀"},
+		{"D", "Wdróż " + selectedEnv},
+		{"R", "Rollback"},
+		{"P", "Promote DB"},
+		{"L", "Logi"},
+		{"↑↓", "Środowisko"},
+		{"Q", "Wyjdź"},
+	}
+	return "\n" + KeyBar(bindings, w)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
 func keyBind(key, action string) string {
 	return lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorSurface).
-		Padding(0, 1).
-		Render(key) +
-		lipgloss.NewStyle().Foreground(ColorSubtext).Render(" "+action)
+		Foreground(ColorBg).Background(ColorSurface).
+		Padding(0, 1).Render(key) +
+		lipgloss.NewStyle().Foreground(ColorSubtext).Render(" " + action)
 }
 
 func truncateStr(s string, maxLen int) string {

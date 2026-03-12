@@ -4,23 +4,10 @@
 // ║  Git Panel — Wizualna Kontrola Repozytorium (styl GitKraken)           ║
 // ║                                                                          ║
 // ║  Zakładki:                                                               ║
-// ║    · [1] STATUS  — lista zmian z checkboxami, diff, commit, push       ║
-// ║    · [2] GAŁĘZIE — lista lokalnych gałęzi + checkout (ENTER)           ║
-// ║    · [3] HISTORIA — ostatnie 30 commitów (tabela)                       ║
-// ║    · [4] GRAF    — wizualny graf commitów (styl GitKraken)              ║
-// ║                                                                          ║
-// ║  Wybór plików do commita:                                               ║
-// ║    SPACJA   — zaznacz/odznacz plik (checkbox)                           ║
-// ║    a / A    — zaznacz wszystkie / odznacz wszystkie                     ║
-// ║    [i]      — wpisz wiadomość commita                                   ║
-// ║    ENTER    — commit (gdy input sfocusowany)                            ║
-// ║    [p]      — push do remote (po commicie)                              ║
-// ║                                                                          ║
-// ║  Schemat kolorów grafu (Dracula-inspired):                              ║
-// ║    ● #BD93F9 commit  │╱╲ #6272A4 graph  HEAD #50FA7B  branch #FFB86C  ║
-// ║    hash #8BE9FD      tag #FF79C6         msg  #F8F8F2                   ║
-// ║                                                                          ║
-// ║  Auto-refresh co 3s — nowe commity widoczne natychmiast.               ║
+// ║    [1] STATUS  — zmiany z checkboxami, diff, commit, push              ║
+// ║    [2] GAŁĘZIE — lista lokalnych gałęzi + checkout                     ║
+// ║    [3] HISTORIA — ostatnie 30 commitów                                  ║
+// ║    [4] GRAF    — wizualny graf (styl GitKraken)                         ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
 package tui
@@ -35,7 +22,7 @@ import (
 	"github.com/neution/rnr/pkg/gitops"
 )
 
-// ─── Stałe kolorów grafu (Dracula theme) ─────────────────────────────────
+// ─── Kolory grafu i diff (Dracula) ───────────────────────────────────────
 
 var (
 	graphLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
@@ -55,75 +42,67 @@ var (
 	checkboxOffStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
 )
 
-// ─── Zakładki Git Panelu ──────────────────────────────────────────────────
+// ─── Zakładki ─────────────────────────────────────────────────────────────
 
-// GitPanelTab to zakładka aktywna w Git Panelu.
 type GitPanelTab int
 
 const (
-	GitTabStatus   GitPanelTab = iota // [1] Zmiany + diff + commit
-	GitTabBranches                    // [2] Lista gałęzi + checkout
-	GitTabHistory                     // [3] Tabela historii commitów
-	GitTabGraph                       // [4] Wizualny graf (styl GitKraken)
+	GitTabStatus   GitPanelTab = iota
+	GitTabBranches
+	GitTabHistory
+	GitTabGraph
 )
 
 // ─── Model ────────────────────────────────────────────────────────────────
 
-// GitPanelModel obsługuje panel git — podgląd, commit, checkout i graf.
 type GitPanelModel struct {
 	width  int
 	height int
 
-	// Aktywna zakładka
 	tab GitPanelTab
 
-	// Dane git (aktualizowane przez root model z pollingu)
 	gitStatus *gitops.StatusResult
 	branches  []string
 	history   []gitops.CommitInfo
-	gitGraph  []string // Linie grafu z git log --graph
+	gitGraph  []string
 
-	// [1] Status tab — nawigacja plików + checkboxy + commit
+	// Status tab
 	commitInput  textinput.Model
-	selectedFile int            // Indeks zaznaczonego pliku w liście zmian
-	stagedFiles  map[string]bool // Mapa ścieżka → zaznaczony do commita
-	showDiff     bool           // Czy widoczny podgląd diff
+	selectedFile int
+	stagedFiles  map[string]bool
+	showDiff     bool
 	diffLines    []string
 	diffFile     string
-	diffOffset   int // Scroll offset diff
+	diffOffset   int
 
-	// Stan po commicie — oczekiwanie na push
-	lastCommitHash string // Hash ostatniego commita (pokazuje opcję push)
-	pushAvailable  bool   // True gdy jest remote + można pushować
+	lastCommitHash string
+	pushAvailable  bool
 
-	// Stan konfliktu push (non-fast-forward)
-	pushConflict       bool   // True gdy remote jest ahead — pokazuje opcje
-	pushConflictBranch string // Gałąź której dotyczy konflikt
+	// Push conflict
+	pushConflict       bool
+	pushConflictBranch string
 
-	// [2] Branches tab
+	// Branches tab
 	selectedBranch int
 
-	// [3] History tab
+	// History tab
 	selectedHistory int
 
-	// [4] Graph tab
+	// Graph tab
 	selectedGraph int
-	graphOffset   int // Scroll offset grafu
+	graphOffset   int
 
-	// Feedback dla użytkownika
+	// Feedback
 	statusMsg string
 	statusErr bool
-	loading   bool // Trwa operacja git (checkout/commit/push)
+	loading   bool
 }
 
-// NewGitPanelModel tworzy nowy model Git Panelu.
 func NewGitPanelModel(width, height int) GitPanelModel {
 	ti := textinput.New()
 	ti.Placeholder = "wpisz wiadomość commita i naciśnij ENTER..."
 	ti.CharLimit = 200
 	ti.Width = min(width-6, 70)
-	// Input domyślnie NIE jest sfocusowany — SPACJA/↑↓ nawiguje po plikach
-	// Użytkownik naciska 'i' aby edytować wiadomość commita
 
 	return GitPanelModel{
 		width:       width,
@@ -134,26 +113,21 @@ func NewGitPanelModel(width, height int) GitPanelModel {
 	}
 }
 
-// ─── Interfejs Bubble Tea ─────────────────────────────────────────────────
+// ─── Bubble Tea ───────────────────────────────────────────────────────────
 
-// Init inicjalizuje model.
 func (m GitPanelModel) Init() tea.Cmd { return nil }
 
-// Update obsługuje zdarzenia dla Git Panelu.
 func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
 
-	// ── Aktualizacje danych ────────────────────────────────────────────
 	case GitStatusMsg:
 		if msg.Err == nil {
 			m.gitStatus = msg.Result
-			// Wyzeruj selectedFile jeśli wyszła poza zakres
 			if m.gitStatus != nil && m.selectedFile >= len(m.gitStatus.DirtyFiles) {
 				m.selectedFile = max(0, len(m.gitStatus.DirtyFiles)-1)
 			}
-			// Usuń ze stagedFiles pliki których już nie ma
 			newPaths := make(map[string]bool)
 			if m.gitStatus != nil {
 				for _, f := range m.gitStatus.DirtyFiles {
@@ -210,20 +184,18 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 			m.statusErr = true
 		} else {
 			m.lastCommitHash = msg.Hash
-			// Sprawdź czy push jest możliwy (pushAvailable ustawiany z zewnątrz)
-			m.statusMsg = fmt.Sprintf("✓ Commit: %s  [p] Push do remote", msg.Hash)
+			m.statusMsg = fmt.Sprintf("✓ Commit: %s  —  [p] Push do remote", msg.Hash)
 			m.statusErr = false
 			m.commitInput.SetValue("")
-			m.commitInput.Blur() // ← KLUCZOWE: odblokuj input po commicie
+			m.commitInput.Blur()
 			m.showDiff = false
-			m.stagedFiles = make(map[string]bool) // Wyczyść zaznaczenia
+			m.stagedFiles = make(map[string]bool)
 		}
 
 	case GitPushDoneMsg:
 		m.loading = false
 		if msg.Err != nil {
 			if msg.IsNonFastForward {
-				// Remote jest do przodu — pokaż opcje zamiast zwykłego błędu
 				m.pushConflict = true
 				m.pushConflictBranch = msg.Branch
 				m.statusMsg = "⚠  Push odrzucony — remote ma nowe commity"
@@ -237,7 +209,7 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 			m.pushConflict = false
 			m.statusMsg = fmt.Sprintf("✓ Wypchnięto gałąź %s → origin", msg.Branch)
 			m.statusErr = false
-			m.lastCommitHash = "" // Wyczyść po push
+			m.lastCommitHash = ""
 		}
 
 	case GitPullRebasePushDoneMsg:
@@ -247,15 +219,13 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 			m.statusMsg = "✗ Pull+rebase+push nieudany: " + msg.Err.Error()
 			m.statusErr = true
 		} else {
-			m.statusMsg = fmt.Sprintf("✓ Pull+rebase+push: gałąź %s zsynchronizowana z origin", msg.Branch)
+			m.statusMsg = fmt.Sprintf("✓ Pull+rebase+push OK: gałąź %s zsynchronizowana", msg.Branch)
 			m.statusErr = false
 			m.lastCommitHash = ""
 		}
 
-	// ── Klawiatura ────────────────────────────────────────────────────
 	case tea.KeyMsg:
-
-		// ── Tryb konfliktu push — obsługa ESC ─────────────────────────
+		// Tryb konfliktu push — ESC
 		if m.tab == GitTabStatus && m.pushConflict {
 			switch msg.String() {
 			case "esc", "q":
@@ -263,11 +233,9 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 				m.statusMsg = "Push anulowany"
 				m.statusErr = false
 			}
-			// Klawisze u/f/U/F obsługiwane niżej (ogólna obsługa)
-			// Nie blokujemy dalszego przetwarzania — let fall through
 		}
 
-		// ── Tryb podglądu diff (Status tab) — osobna obsługa ─────────
+		// Tryb diff
 		if m.tab == GitTabStatus && m.showDiff {
 			switch msg.String() {
 			case "esc", "d", "q":
@@ -291,14 +259,14 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 
-		// ── Globalny klawisz 'i' — focusuje commit input ───────────
+		// Klawisz 'i' — focusuj commit input
 		if m.tab == GitTabStatus && msg.String() == "i" && !m.commitInput.Focused() {
 			m.commitInput.Focus()
 			m.commitInput.Width = min(m.width-6, 70)
 			return m, tea.Batch(cmds...)
 		}
 
-		// ── Jeśli commit input jest sfocusowany — przekaż mu zdarzenia ─
+		// Commit input sfocusowany
 		if m.tab == GitTabStatus && m.commitInput.Focused() {
 			switch msg.String() {
 			case "esc":
@@ -316,13 +284,9 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 					} else {
 						m.loading = true
 						m.statusMsg = ""
-						// Zbuduj listę zaznaczonych plików (lub wszystkich jeśli brak zaznaczenia)
 						filesToStage := m.selectedFilePaths()
 						return m, func() tea.Msg {
-							return GitCommitRequestMsg{
-								Message: commitMsg,
-								Files:   filesToStage,
-							}
+							return GitCommitRequestMsg{Message: commitMsg, Files: filesToStage}
 						}
 					}
 				}
@@ -335,10 +299,8 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 			}
 		}
 
-		// ── Główny handler klawiszy (input NIE sfocusowany) ───────────
+		// Główny handler klawiszy
 		switch msg.String() {
-
-		// Przełączanie zakładek
 		case "1":
 			m.tab = GitTabStatus
 			m.showDiff = false
@@ -351,7 +313,6 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 		case "4":
 			m.tab = GitTabGraph
 			m.commitInput.Blur()
-
 		case "tab":
 			m.tab = (m.tab + 1) % 4
 			if m.tab != GitTabStatus {
@@ -359,7 +320,6 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 			}
 			m.showDiff = false
 
-		// Nawigacja ↑↓ — zależna od aktywnej zakładki
 		case "up", "k":
 			switch m.tab {
 			case GitTabStatus:
@@ -407,30 +367,27 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 				}
 			}
 
-		// ── SPACJA — toggle zaznaczenia pliku do commita ──────────────
 		case " ":
 			if m.tab == GitTabStatus && m.gitStatus != nil && !m.gitStatus.IsClean {
 				if len(m.gitStatus.DirtyFiles) > 0 {
 					file := m.gitStatus.DirtyFiles[m.selectedFile].Path
 					m.stagedFiles[file] = !m.stagedFiles[file]
-					// Wyczyść statusMsg aby nie zasłaniał widoku
 					m.statusMsg = ""
 				}
 			}
 
-		// ── 'a' — zaznacz/odznacz wszystkie pliki ─────────────────────
 		case "a", "A":
 			if m.tab == GitTabStatus && m.gitStatus != nil && !m.gitStatus.IsClean {
-				// Sprawdź czy wszystkie są zaznaczone
-				allSelected := len(m.stagedFiles) == len(m.gitStatus.DirtyFiles)
+				allSelected := true
 				for _, f := range m.gitStatus.DirtyFiles {
-					allSelected = allSelected && m.stagedFiles[f.Path]
+					if !m.stagedFiles[f.Path] {
+						allSelected = false
+						break
+					}
 				}
 				if allSelected {
-					// Odznacz wszystkie
 					m.stagedFiles = make(map[string]bool)
 				} else {
-					// Zaznacz wszystkie
 					for _, f := range m.gitStatus.DirtyFiles {
 						m.stagedFiles[f.Path] = true
 					}
@@ -438,69 +395,51 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 				m.statusMsg = ""
 			}
 
-		// ── Obsługa konfliktu push (non-fast-forward) ─────────────────
-		// Aktywne gdy m.pushConflict == true
 		case "u", "U":
-			// [U] pull --rebase + push (zalecane)
 			if m.tab == GitTabStatus && m.pushConflict && !m.loading {
 				branch := m.pushConflictBranch
 				m.loading = true
 				m.pushConflict = false
 				m.statusMsg = "↓ git pull --rebase + push..."
 				m.statusErr = false
-				return m, func() tea.Msg {
-					return GitPullRebasePushRequestMsg{Branch: branch}
-				}
+				return m, func() tea.Msg { return GitPullRebasePushRequestMsg{Branch: branch} }
 			}
 
 		case "f", "F":
-			// [F] force-with-lease (nadpisuje remote — tylko gdy świadomy wybór)
 			if m.tab == GitTabStatus && m.pushConflict && !m.loading {
 				branch := m.pushConflictBranch
 				m.loading = true
 				m.pushConflict = false
 				m.statusMsg = "⚡ git push --force-with-lease..."
 				m.statusErr = false
-				return m, func() tea.Msg {
-					return GitForcePushRequestMsg{Branch: branch}
-				}
+				return m, func() tea.Msg { return GitForcePushRequestMsg{Branch: branch} }
 			}
 
-		// ── 'p' — push bieżącej gałęzi ───────────────────────────────
 		case "p", "P":
 			if m.tab == GitTabStatus && !m.loading {
 				m.loading = true
 				m.statusMsg = ""
 				m.pushConflict = false
-				return m, func() tea.Msg {
-					return GitPushRequestMsg{}
-				}
+				return m, func() tea.Msg { return GitPushRequestMsg{} }
 			}
 
-		// Podgląd diff zaznaczonego pliku lub checkout gałęzi
 		case "d":
 			if m.tab == GitTabStatus && m.gitStatus != nil && !m.gitStatus.IsClean &&
 				len(m.gitStatus.DirtyFiles) > 0 {
 				file := m.gitStatus.DirtyFiles[m.selectedFile].Path
 				m.statusMsg = ""
-				return m, func() tea.Msg {
-					return GitDiffRequestMsg{File: file}
-				}
+				return m, func() tea.Msg { return GitDiffRequestMsg{File: file} }
 			}
 
 		case "enter":
 			switch m.tab {
 			case GitTabStatus:
-				// ENTER na pliku → podgląd diff
 				if m.gitStatus != nil && !m.gitStatus.IsClean && len(m.gitStatus.DirtyFiles) > 0 {
 					file := m.gitStatus.DirtyFiles[m.selectedFile].Path
 					m.statusMsg = ""
-					return m, func() tea.Msg {
-						return GitDiffRequestMsg{File: file}
-					}
+					return m, func() tea.Msg { return GitDiffRequestMsg{File: file} }
 				}
 			case GitTabBranches:
-				// ENTER na gałęzi = checkout
 				if m.loading || len(m.branches) == 0 {
 					break
 				}
@@ -512,9 +451,7 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 				}
 				m.loading = true
 				m.statusMsg = ""
-				return m, func() tea.Msg {
-					return GitCheckoutRequestMsg{Branch: branch}
-				}
+				return m, func() tea.Msg { return GitCheckoutRequestMsg{Branch: branch} }
 			}
 		}
 
@@ -527,12 +464,9 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// selectedFilePaths zwraca listę ścieżek do zaindeksowania.
-// Jeśli użytkownik nie zaznaczył żadnego pliku — zwraca pustą listę (= stage all).
-// Jeśli zaznaczył przynajmniej jeden — zwraca tylko zaznaczone.
 func (m GitPanelModel) selectedFilePaths() []string {
 	if len(m.stagedFiles) == 0 {
-		return nil // puste = git add -A
+		return nil
 	}
 	var paths []string
 	for path, checked := range m.stagedFiles {
@@ -541,296 +475,276 @@ func (m GitPanelModel) selectedFilePaths() []string {
 		}
 	}
 	if len(paths) == 0 {
-		return nil // żaden nie zaznaczony = stage all
+		return nil
 	}
 	return paths
 }
 
 // ─── Widok ────────────────────────────────────────────────────────────────
 
-// View renderuje Git Panel.
 func (m GitPanelModel) View() string {
-	contentW := min(m.width-2, 96)
+	w := min(m.width, 96)
 
-	var parts []string
-	parts = append(parts, m.renderHeader(contentW))
-	parts = append(parts, m.renderTabs(contentW))
-	parts = append(parts, m.renderContent(contentW))
+	var sb strings.Builder
+
+	sb.WriteString(m.renderTopBar(w))
+	sb.WriteString("\n")
+	sb.WriteString(m.renderTabs(w))
+	sb.WriteString("\n")
+	sb.WriteString(m.renderContent(w))
 	if m.statusMsg != "" {
-		parts = append(parts, m.renderStatusBar())
+		sb.WriteString(m.renderStatusBar())
 	}
-	parts = append(parts, m.renderKeyBindings(contentW))
+	sb.WriteString("\n")
+	sb.WriteString(m.renderKeyBar(w))
 
-	return strings.Join(parts, "")
+	return sb.String()
 }
 
-// ─── Sekcje Widoku ────────────────────────────────────────────────────────
+// ─── Top bar ─────────────────────────────────────────────────────────────
 
-func (m GitPanelModel) renderHeader(width int) string {
+func (m GitPanelModel) renderTopBar(w int) string {
+	gitLabel := lipgloss.NewStyle().
+		Foreground(ColorBg).Background(ColorSecondary).
+		Bold(true).Padding(0, 2).Render("🔧 GitPanel")
+
 	branch := "n/a"
-	isGit := false
 	if m.gitStatus != nil {
 		branch = m.gitStatus.Branch
-		isGit = m.gitStatus.IsGitRepo
 	}
+	branchBadge := lipgloss.NewStyle().
+		Foreground(ColorBg).Background(lipgloss.Color("#44475A")).
+		Padding(0, 1).Bold(true).Render("⎇  " + branch)
 
-	title := StyleTitle.Render("⎇  Git Panel")
-
-	var branchInfo, statusDot string
-	if isGit {
-		branchInfo = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("  " + branch)
-		if m.gitStatus != nil && m.gitStatus.IsClean {
-			statusDot = StyleSuccess.Render("  ●  czyste")
-		} else if m.gitStatus != nil {
-			// Pokaż ile plików zaznaczono vs ile jest łącznie
-			total := len(m.gitStatus.DirtyFiles)
-			checked := m.countChecked()
-			if checked > 0 {
-				statusDot = StyleWarning.Render(fmt.Sprintf("  ●  %d/%d do commita", checked, total))
-			} else {
-				statusDot = StyleWarning.Render(fmt.Sprintf("  ●  %d zmian", total))
-			}
-		}
+	var statusBadge string
+	if m.gitStatus == nil {
+		statusBadge = lipgloss.NewStyle().Foreground(ColorMuted).Render("⟳ ładowanie...")
+	} else if m.gitStatus.IsClean {
+		statusBadge = lipgloss.NewStyle().
+			Foreground(ColorBg).Background(ColorSuccess).
+			Padding(0, 1).Render("✓ czyste")
 	} else {
-		branchInfo = StyleMuted.Render("  (brak git)")
-	}
-
-	refreshInfo := StyleMuted.Render("  ⟳ live")
-
-	header := lipgloss.NewStyle().Width(width).Padding(0, 1).
-		Render(title + branchInfo + statusDot + refreshInfo)
-	return header + "\n" + Divider(width) + "\n"
-}
-
-func (m GitPanelModel) renderTabs(width int) string {
-	tabs := []struct {
-		label string
-		tab   GitPanelTab
-	}{
-		{"[1] Status", GitTabStatus},
-		{"[2] Gałęzie", GitTabBranches},
-		{"[3] Historia", GitTabHistory},
-		{"[4] GRAF ◈", GitTabGraph},
-	}
-
-	var rendered []string
-	for _, t := range tabs {
-		if t.tab == m.tab {
-			rendered = append(rendered,
-				lipgloss.NewStyle().
-					Foreground(ColorPrimary).
-					Bold(true).
-					Underline(true).
-					Render(t.label),
-			)
+		total := len(m.gitStatus.DirtyFiles)
+		checked := m.countChecked()
+		var txt string
+		if checked > 0 {
+			txt = fmt.Sprintf("✓ %d/%d zaznaczono", checked, total)
 		} else {
-			rendered = append(rendered, StyleMuted.Render(t.label))
+			txt = fmt.Sprintf("⚠ %d zmian", total)
 		}
+		statusBadge = lipgloss.NewStyle().
+			Foreground(ColorBg).Background(ColorWarning).
+			Padding(0, 1).Render(txt)
 	}
-	_ = width
-	return "  " + strings.Join(rendered, "  │  ") + "\n\n"
+
+	refreshStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("  ⟳ live")
+
+	topLine := lipgloss.NewStyle().Width(w).Background(ColorBgAlt).Padding(0, 1).
+		Render(gitLabel + "  " + branchBadge + "  " + statusBadge + refreshStr)
+	divLine := lipgloss.NewStyle().Foreground(ColorSecondary).Render(repeatChar("━", w))
+
+	return topLine + "\n" + divLine
 }
 
-func (m GitPanelModel) renderContent(width int) string {
+// ─── Tabs (TYLKO raz) ────────────────────────────────────────────────────
+
+func (m GitPanelModel) renderTabs(w int) string {
+	labels := []string{"1 STATUS", "2 GAŁĘZIE", "3 HISTORIA", "4 GRAF ◈"}
+	bar := RenderTabs(labels, int(m.tab), ColorSecondary)
+	return bar
+}
+
+func (m GitPanelModel) renderContent(w int) string {
 	switch m.tab {
 	case GitTabStatus:
-		return m.renderStatusTab(width)
+		return m.renderStatusTab(w)
 	case GitTabBranches:
-		return m.renderBranchesTab(width)
+		return m.renderBranchesTab(w)
 	case GitTabHistory:
-		return m.renderHistoryTab(width)
+		return m.renderHistoryTab(w)
 	case GitTabGraph:
-		return m.renderGraphTab(width)
+		return m.renderGraphTab(w)
 	}
 	return ""
 }
 
 // ─── [1] Status Tab ───────────────────────────────────────────────────────
 
-// renderStatusTab wyświetla listę zmian z checkboxami, podgląd diff i formularz commita.
-func (m GitPanelModel) renderStatusTab(width int) string {
+func (m GitPanelModel) renderStatusTab(w int) string {
 	if m.gitStatus == nil {
-		return "  " + StyleInfo.Render("⟳ Ładowanie statusu Git...") + "\n"
+		return "\n  " + StyleInfo.Render("⟳ Ładowanie statusu Git...") + "\n"
 	}
 	if !m.gitStatus.IsGitRepo {
-		return "  " + StyleMuted.Render("Ten katalog nie jest repozytorium Git.") + "\n"
+		return "\n  " + StyleMuted.Render("Ten katalog nie jest repozytorium Git.") + "\n"
 	}
 
-	// ── Tryb diff ─────────────────────────────────────────────────────
 	if m.showDiff {
-		return m.renderDiffView(width)
+		return m.renderDiffView(w)
 	}
-
-	// ── Tryb konfliktu push (non-fast-forward) ─────────────────────
 	if m.pushConflict {
-		return m.renderPushConflict(width)
+		return m.renderPushConflict(w)
 	}
 
-	var lines []string
+	var rows []string
+	rows = append(rows, "")
 
-	// Wiersz statusu remote
+	// Remote
 	if m.gitStatus.HasRemote {
 		remoteShort := m.gitStatus.RemoteURL
-		if len(remoteShort) > 50 {
-			remoteShort = "…" + remoteShort[len(remoteShort)-47:]
+		if len(remoteShort) > 55 {
+			remoteShort = "…" + remoteShort[len(remoteShort)-52:]
 		}
-		lines = append(lines,
-			"  "+StyleMuted.Render("🔗 remote: "+remoteShort),
-			"",
-		)
+		rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorMuted).Render("🔗 "+remoteShort))
 	} else {
-		lines = append(lines,
-			"  "+StyleWarning.Render("⚠  Brak remote origin — push niedostępny"),
-			"  "+StyleMuted.Render("   Dodaj: git remote add origin <URL>"),
-			"",
+		rows = append(rows,
+			"  "+lipgloss.NewStyle().Foreground(ColorBg).Background(ColorWarning).Padding(0, 1).
+				Render("⚠ Brak remote origin — push niedostępny"),
+			"  "+StyleMuted.Render("  Dodaj: git remote add origin <URL>"),
 		)
 	}
+	rows = append(rows, "")
 
 	if m.gitStatus.IsClean {
-		lines = append(lines,
-			"  "+StyleSuccess.Render("✅  Repozytorium czyste — brak zmian do zatwierdzenia"),
-			"",
+		rows = append(rows,
+			"  "+lipgloss.NewStyle().Foreground(ColorBg).Background(ColorSuccess).
+				Padding(0, 1).Bold(true).Render("✅  Repozytorium czyste — brak zmian"),
 		)
 		if m.gitStatus.LastCommit.Hash != "" {
-			lines = append(lines,
-				"  "+StyleLabel.Render("Ostatni commit:"),
-				fmt.Sprintf("  %s  %s  %s",
-					StyleMuted.Render(m.gitStatus.LastCommit.ShortHash),
-					StyleValue.Render(truncateStr(m.gitStatus.LastCommit.Message, width-40)),
-					StyleMuted.Render(m.gitStatus.LastCommit.RelativeDate),
-				),
-				"  "+StyleMuted.Render("  autor: "+m.gitStatus.LastCommit.Author),
-			)
+			rows = append(rows, "")
+			rows = append(rows, "  "+SectionHeader("📌", "Ostatni commit:", w-4))
+			rows = append(rows, fmt.Sprintf("  %s  %s  %s",
+				lipgloss.NewStyle().Foreground(ColorMuted).Render(m.gitStatus.LastCommit.ShortHash),
+				lipgloss.NewStyle().Foreground(ColorText).Render(truncateStr(m.gitStatus.LastCommit.Message, w-40)),
+				lipgloss.NewStyle().Foreground(ColorMuted).Render(m.gitStatus.LastCommit.RelativeDate),
+			))
+			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorMuted).
+				Render("autor: "+m.gitStatus.LastCommit.Author))
 		}
-		// Pokaż opcję push jeśli jest remote i ostatni commit
 		if !m.loading && m.gitStatus.HasRemote {
-			lines = append(lines, "", "  "+StyleMuted.Render("[p] Push do remote"))
+			rows = append(rows, "", "  "+StyleMuted.Render("[p] Push do remote"))
 		}
 	} else {
 		checkedCount := m.countChecked()
+		total := len(m.gitStatus.DirtyFiles)
 
-		// ── Nagłówek listy plików ─────────────────────────────────────
-		hintLine := "  " + StyleMuted.Render("↑↓ wybierz  SPACJA zaznacz  [a] wszystkie  [d] diff  [i] commit")
+		// Nagłówek listy
+		rows = append(rows, "  "+SectionHeader("📝", fmt.Sprintf("%d niezatwierdzonych zmian:", total), w-4))
+		rows = append(rows, "")
+
+		// Legenda (dostosowana do stanu)
 		if checkedCount > 0 {
-			hintLine = "  " + lipgloss.NewStyle().Foreground(ColorPrimary).
-				Render(fmt.Sprintf("✓ %d plik(ów) zaznaczonych do commita  SPACJA odznacz  [a] reset", checkedCount))
+			legendBadge := lipgloss.NewStyle().Foreground(ColorBg).Background(ColorSuccess).
+				Padding(0, 1).Render(fmt.Sprintf("✓ %d zaznaczono", checkedCount))
+			rows = append(rows, "  "+legendBadge+
+				lipgloss.NewStyle().Foreground(ColorMuted).Render("  SPACJA odznacz  [a] reset  [i] commit"))
+		} else {
+			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorMuted).
+				Render("↑↓ wybierz  SPACJA zaznacz  [a] wszystkie  [d] diff  [i] commit"))
 		}
-		lines = append(lines,
-			"  "+StyleWarning.Render(fmt.Sprintf("⚠  %d niezatwierdzonych zmian:", len(m.gitStatus.DirtyFiles))),
-			hintLine,
-			"",
-		)
+		rows = append(rows, "")
 
-		// ── Lista plików z checkboxami ────────────────────────────────
-		maxFiles := 12
+		// Lista plików
+		maxFiles := 14
 		for i, f := range m.gitStatus.DirtyFiles {
 			if i >= maxFiles {
-				lines = append(lines,
-					StyleMuted.Render(fmt.Sprintf("     ... i %d więcej", len(m.gitStatus.DirtyFiles)-maxFiles)),
-				)
+				rows = append(rows, "    "+StyleMuted.Render(fmt.Sprintf("... i %d więcej", total-maxFiles)))
 				break
 			}
+
 			icon, iconStyle := gitFileIcon(f.Status)
 			isSelected := i == m.selectedFile
 			isChecked := m.stagedFiles[f.Path]
 
-			// Checkbox
-			var checkBox string
+			var cb string
 			if isChecked {
-				checkBox = checkboxOnStyle.Render("[✓]")
+				cb = checkboxOnStyle.Render("[✓]")
 			} else {
-				checkBox = checkboxOffStyle.Render("[ ]")
+				cb = checkboxOffStyle.Render("[ ]")
 			}
 
-			fileStr := fmt.Sprintf("  %s %s %s  %s",
-				checkBox,
-				iconStyle.Render(fmt.Sprintf("[%s]", strings.TrimSpace(f.Status))),
-				icon,
-				StyleValue.Render(f.Path),
-			)
+			statusTag := iconStyle.Render(fmt.Sprintf("[%s]", strings.TrimSpace(f.Status)))
+			pathStr := lipgloss.NewStyle().Foreground(ColorText).Render(f.Path)
+
+			line := fmt.Sprintf("  %s %s %s  %s", cb, statusTag, icon, pathStr)
 
 			if isSelected {
-				// Kursor nawigacji
-				arrow := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("▶")
-				fileStr = " " + arrow + fileStr[2:]
-				fileStr = lipgloss.NewStyle().
-					Background(lipgloss.Color("#1E1E2E")).
-					Width(width - 2).
-					Render(strings.TrimLeft(fileStr, " "))
+				arrow := lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("▶")
+				line = " " + arrow + " " + cb + " " + statusTag + " " + icon + "  " + pathStr
+				line = lipgloss.NewStyle().
+					Background(lipgloss.Color("#1A2433")).
+					Width(w - 2).
+					Render(line)
 			}
-			lines = append(lines, fileStr)
+			rows = append(rows, line)
 		}
 
-		// ── Podsumowanie zaznaczenia ──────────────────────────────────
-		lines = append(lines, "")
+		// Podsumowanie zaznaczenia
+		rows = append(rows, "")
 		if checkedCount == 0 {
-			lines = append(lines,
-				"  "+StyleMuted.Render("(brak zaznaczonych → commit obejmie WSZYSTKIE pliki)"),
-			)
+			rows = append(rows, "  "+StyleMuted.Render("(brak zaznaczonych → commit obejmie WSZYSTKIE pliki)"))
 		} else {
-			lines = append(lines,
-				"  "+checkboxOnStyle.Render(fmt.Sprintf("Zaznaczono: %d/%d pliku(ów) — commit obejmie tylko zaznaczone", checkedCount, len(m.gitStatus.DirtyFiles))),
-			)
+			rows = append(rows, "  "+checkboxOnStyle.Render(fmt.Sprintf(
+				"Zaznaczono: %d/%d — commit obejmie tylko zaznaczone", checkedCount, total,
+			)))
 		}
 
-		// ── Formularz commita ─────────────────────────────────────────
-		lines = append(lines, "")
-
+		// Formularz commita
+		rows = append(rows, "")
 		if m.commitInput.Focused() {
-			lines = append(lines, "  "+lipgloss.NewStyle().Foreground(ColorPrimary).Render("✎  Wiadomość commita [ESC anuluj]:"))
+			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("✎  Wiadomość commita [ESC anuluj]:"))
 		} else {
-			lines = append(lines, "  "+StyleLabel.Render("✎  [i] Napisz commit  [p] Push"))
+			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorSubtext).Render("  [i] Napisz commit    [p] Push"))
 		}
-		lines = append(lines, "  "+m.commitInput.View())
-		lines = append(lines, "")
+		rows = append(rows, "  "+m.commitInput.View())
+		rows = append(rows, "")
 
 		if m.loading {
-			lines = append(lines, "  "+StyleInfo.Render("⟳  Trwa operacja git..."))
+			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorInfo).Render("⟳  Trwa operacja git..."))
 		}
 	}
 
-	return strings.Join(lines, "\n") + "\n"
+	return strings.Join(rows, "\n") + "\n"
 }
 
-// renderDiffView wyświetla kolorowy podgląd diff dla wybranego pliku.
-func (m GitPanelModel) renderDiffView(width int) string {
-	var lines []string
+// renderDiffView wyświetla kolorowy podgląd diff.
+func (m GitPanelModel) renderDiffView(w int) string {
+	var rows []string
 
-	// ── Nagłówek diff ─────────────────────────────────────────────────
 	titleBar := lipgloss.NewStyle().
-		Background(lipgloss.Color("#44475A")).
-		Width(width - 2).
-		Padding(0, 1).
+		Background(lipgloss.Color("#313244")).
+		Width(w - 2).Padding(0, 1).
 		Render(fmt.Sprintf("📄  Diff: %s   %s",
 			lipgloss.NewStyle().Foreground(lipgloss.Color("#8BE9FD")).Bold(true).Render(m.diffFile),
-			StyleMuted.Render("[ESC / d] zamknij  [↑↓] przewijaj"),
+			lipgloss.NewStyle().Foreground(ColorMuted).Render("[ESC / d] zamknij  [↑↓] przewijaj"),
 		))
-	lines = append(lines, titleBar, "")
+	rows = append(rows, "", titleBar, "")
 
-	// ── Zawartość diff ────────────────────────────────────────────────
 	visH := m.diffVisibleLines()
 	end := min(m.diffOffset+visH, len(m.diffLines))
 	for _, l := range m.diffLines[m.diffOffset:end] {
-		lines = append(lines, "  "+colorizeDiffLine(l))
+		rows = append(rows, "  "+colorizeDiffLine(l))
 	}
 
-	// ── Pasek postępu scroll ──────────────────────────────────────────
 	if len(m.diffLines) > visH {
 		total := max(1, len(m.diffLines)-visH)
 		pct := m.diffOffset * 100 / total
-		lines = append(lines, "",
-			"  "+StyleMuted.Render(fmt.Sprintf("── %d/%d linii (%d%%) ──", m.diffOffset+1, len(m.diffLines), pct)),
-		)
+		rows = append(rows, "", "  "+StyleMuted.Render(
+			fmt.Sprintf("── %d/%d linii (%d%%) ──", m.diffOffset+1, len(m.diffLines), pct),
+		))
 	}
 
-	return strings.Join(lines, "\n") + "\n"
+	return strings.Join(rows, "\n") + "\n"
 }
 
 // ─── [2] Branches Tab ─────────────────────────────────────────────────────
 
-func (m GitPanelModel) renderBranchesTab(width int) string {
+func (m GitPanelModel) renderBranchesTab(w int) string {
+	var rows []string
+	rows = append(rows, "")
+
 	if len(m.branches) == 0 {
-		return "  " + StyleMuted.Render("Brak gałęzi lokalnych.") + "\n"
+		rows = append(rows, "  "+StyleMuted.Render("Brak gałęzi lokalnych."))
+		return strings.Join(rows, "\n") + "\n"
 	}
 
 	currentBranch := ""
@@ -838,92 +752,105 @@ func (m GitPanelModel) renderBranchesTab(width int) string {
 		currentBranch = m.gitStatus.Branch
 	}
 
-	var lines []string
+	rows = append(rows, "  "+SectionHeader("⎇", "Gałęzie lokalne:", w-4))
+	rows = append(rows, "")
+
 	for i, b := range m.branches {
 		isCurrent := b == currentBranch
 		isSelected := i == m.selectedBranch
 
-		var line string
-		if isCurrent && isSelected {
-			line = fmt.Sprintf("  ▶  %s%s",
-				lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(b),
-				StyleMuted.Render("  ★ aktywna"),
-			)
-			line = lipgloss.NewStyle().Background(lipgloss.Color("#1E1E2E")).Width(width-2).Render(line)
-		} else if isCurrent {
-			line = fmt.Sprintf("  ★  %s%s",
-				lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(b),
-				StyleMuted.Render("  (aktywna)"),
-			)
+		var prefix, nameStr string
+
+		if isCurrent {
+			prefix = lipgloss.NewStyle().Foreground(ColorSuccess).Render("  ★ ")
+			nameStr = lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render(b)
+			nameStr += lipgloss.NewStyle().Foreground(ColorMuted).Render("  (aktywna)")
 		} else if isSelected {
-			prefix := lipgloss.NewStyle().Foreground(ColorPrimary).Render("  ▶  ")
-			name := lipgloss.NewStyle().Foreground(ColorPrimary).Render(b)
-			line = lipgloss.NewStyle().Background(lipgloss.Color("#1E1E2E")).Width(width-2).Render(prefix + name)
+			prefix = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("  ▶ ")
+			nameStr = lipgloss.NewStyle().Foreground(ColorSecondary).Render(b)
 		} else {
-			line = "     " + StyleValue.Render(b)
+			prefix = "    "
+			nameStr = lipgloss.NewStyle().Foreground(ColorText).Render(b)
 		}
-		lines = append(lines, line)
+
+		line := prefix + nameStr
+		if isSelected && !isCurrent {
+			line = lipgloss.NewStyle().
+				Background(lipgloss.Color("#1A2433")).
+				Width(w - 2).Render(line)
+		}
+		rows = append(rows, line)
 	}
 
-	result := strings.Join(lines, "\n") + "\n\n"
+	rows = append(rows, "")
 	if m.loading {
-		result += "  " + StyleInfo.Render("⟳  Trwa checkout...") + "\n"
+		rows = append(rows, "  "+StyleInfo.Render("⟳  Trwa checkout..."))
 	} else {
-		result += "  " + StyleMuted.Render("[ENTER] Checkout  [↑↓ / j/k] Nawigacja") + "\n"
+		rows = append(rows, "  "+StyleMuted.Render("[ENTER] Checkout  [↑↓ / j/k] Nawigacja"))
 	}
-	return result
+
+	return strings.Join(rows, "\n") + "\n"
 }
 
-// ─── [3] Historia Tab ─────────────────────────────────────────────────────
+// ─── [3] History Tab ──────────────────────────────────────────────────────
 
-func (m GitPanelModel) renderHistoryTab(width int) string {
+func (m GitPanelModel) renderHistoryTab(w int) string {
+	var rows []string
+	rows = append(rows, "")
+
 	if len(m.history) == 0 {
-		return "  " + StyleMuted.Render("Brak historii commitów.") + "\n"
+		rows = append(rows, "  "+StyleMuted.Render("Brak historii commitów."))
+		return strings.Join(rows, "\n") + "\n"
 	}
 
-	var lines []string
-	lines = append(lines, fmt.Sprintf("  %s  %s  %s  %s",
-		StyleLabel.Render("Hash   "),
-		StyleLabel.Render("Kiedy      "),
-		StyleLabel.Render("Autor           "),
-		StyleLabel.Render("Wiadomość"),
+	rows = append(rows, "  "+SectionHeader("📜", "Historia commitów:", w-4))
+	rows = append(rows, "")
+
+	// Nagłówek tabeli
+	rows = append(rows, fmt.Sprintf("  %s  %s  %s  %s",
+		lipgloss.NewStyle().Foreground(ColorSubtext).Bold(true).Width(8).Render("Hash"),
+		lipgloss.NewStyle().Foreground(ColorSubtext).Bold(true).Width(11).Render("Kiedy"),
+		lipgloss.NewStyle().Foreground(ColorSubtext).Bold(true).Width(17).Render("Autor"),
+		lipgloss.NewStyle().Foreground(ColorSubtext).Bold(true).Render("Wiadomość"),
 	))
-	lines = append(lines, "  "+StyleMuted.Render(strings.Repeat("─", min(width-4, 80))))
+	rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorSurface).Render(repeatChar("─", min(w-4, 80))))
 
 	for i, c := range m.history {
 		isSelected := i == m.selectedHistory
 
 		line := fmt.Sprintf("  %s  %s  %s  %s",
 			graphHashStyle.Render(fmt.Sprintf("%-7s", c.ShortHash)),
-			StyleMuted.Render(fmt.Sprintf("%-10s", truncateStr(c.RelativeDate, 10))),
-			StyleMuted.Render(fmt.Sprintf("%-16s", truncateStr(c.Author, 16))),
-			truncateStr(c.Message, width-52),
+			lipgloss.NewStyle().Foreground(ColorMuted).Render(fmt.Sprintf("%-10s", truncateStr(c.RelativeDate, 10))),
+			lipgloss.NewStyle().Foreground(ColorSubtext).Render(fmt.Sprintf("%-16s", truncateStr(c.Author, 16))),
+			lipgloss.NewStyle().Foreground(ColorText).Render(truncateStr(c.Message, w-52)),
 		)
 
 		if isSelected {
 			line = lipgloss.NewStyle().
-				Background(lipgloss.Color("#2A2A3E")).
-				Width(width - 2).
+				Background(lipgloss.Color("#1A2433")).
+				Width(w - 2).
 				Render(line)
 		}
-		lines = append(lines, line)
+		rows = append(rows, line)
 	}
 
-	return strings.Join(lines, "\n") + "\n"
+	return strings.Join(rows, "\n") + "\n"
 }
 
-// ─── [4] Graf Tab (styl GitKraken) ───────────────────────────────────────
+// ─── [4] Graf Tab ─────────────────────────────────────────────────────────
 
-// renderGraphTab wyświetla wizualny graf commitów z kolorowanymi gałęziami.
-func (m GitPanelModel) renderGraphTab(width int) string {
+func (m GitPanelModel) renderGraphTab(w int) string {
+	var rows []string
+	rows = append(rows, "")
+
 	if len(m.gitGraph) == 0 {
+		msg := "Brak danych grafu (brak commitów lub nie jest repo Git)."
 		if m.loading {
-			return "  " + StyleInfo.Render("⟳  Ładowanie grafu commitów...") + "\n"
+			msg = "⟳  Ładowanie grafu commitów..."
 		}
-		return "  " + StyleMuted.Render("Brak danych grafu (brak commitów lub nie jest repo Git).") + "\n"
+		rows = append(rows, "  "+StyleMuted.Render(msg))
+		return strings.Join(rows, "\n") + "\n"
 	}
-
-	var lines []string
 
 	// Legenda
 	legend := fmt.Sprintf("  %s  %s  %s  %s  %s",
@@ -933,11 +860,10 @@ func (m GitPanelModel) renderGraphTab(width int) string {
 		graphTagStyle.Render("tag"),
 		graphLineStyle.Render("│╱╲ linia"),
 	)
-	lines = append(lines, legend)
-	lines = append(lines, "  "+graphLineStyle.Render(strings.Repeat("─", min(width-4, 80))))
-	lines = append(lines, "")
+	rows = append(rows, legend)
+	rows = append(rows, "  "+graphLineStyle.Render(repeatChar("─", min(w-4, 80))))
+	rows = append(rows, "")
 
-	// Widoczne linie
 	visH := m.graphVisibleLines()
 	start := m.graphOffset
 	end := min(start+visH, len(m.gitGraph))
@@ -945,151 +871,128 @@ func (m GitPanelModel) renderGraphTab(width int) string {
 	for i, rawLine := range m.gitGraph[start:end] {
 		globalIdx := start + i
 		isSelected := globalIdx == m.selectedGraph
-
 		colorized := colorizeGraphLine(rawLine)
-
 		var rendered string
 		if isSelected {
-			selector := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("▶")
-			rendered = selector + " " + colorized
-			rendered = lipgloss.NewStyle().Background(lipgloss.Color("#1E1E2E")).Render(rendered)
+			rendered = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("▶") + " " + colorized
+			rendered = lipgloss.NewStyle().Background(lipgloss.Color("#1A2433")).Render(rendered)
 		} else {
 			rendered = "  " + colorized
 		}
-		lines = append(lines, rendered)
+		rows = append(rows, rendered)
 	}
 
-	// Pasek scroll
 	if len(m.gitGraph) > visH {
 		total := max(1, len(m.gitGraph)-visH)
 		pct := m.graphOffset * 100 / total
-		lines = append(lines, "")
-		lines = append(lines,
-			"  "+StyleMuted.Render(fmt.Sprintf(
-				"── linia %d/%d  (%d%%)  [↑↓/j/k] nawigacja ──",
-				m.graphOffset+1, len(m.gitGraph), pct,
-			)),
-		)
+		rows = append(rows, "", "  "+StyleMuted.Render(fmt.Sprintf(
+			"── linia %d/%d  (%d%%)  [↑↓/j/k] nawigacja ──",
+			m.graphOffset+1, len(m.gitGraph), pct,
+		)))
 	}
 
-	return strings.Join(lines, "\n") + "\n"
+	return strings.Join(rows, "\n") + "\n"
 }
 
-// renderPushConflict renderuje ekran wyboru akcji po odrzuceniu push (non-fast-forward).
-// Pojawia się gdy remote branch jest do przodu względem lokalnej gałęzi.
-func (m GitPanelModel) renderPushConflict(width int) string {
-	var lines []string
+// renderPushConflict renderuje ekran konfliktu push.
+func (m GitPanelModel) renderPushConflict(w int) string {
+	var rows []string
+	rows = append(rows, "")
 
-	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).Bold(true)
-	infoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#8BE9FD"))
-	optStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2"))
-	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
+	warnBadge := lipgloss.NewStyle().Foreground(ColorBg).Background(ColorError).Bold(true).Padding(0, 1).
+		Render("⚠  Push odrzucony — non-fast-forward")
 
-	lines = append(lines,
-		"  "+warnStyle.Render("⚠  Push odrzucony — remote jest do przodu (non-fast-forward)"),
+	rows = append(rows,
+		"  "+warnBadge,
 		"",
-		"  "+infoStyle.Render("Gałąź: "+m.pushConflictBranch),
+		"  "+lipgloss.NewStyle().Foreground(ColorInfo).Render("Gałąź: "+m.pushConflictBranch),
 		"",
-		"  "+descStyle.Render("Zdalnie istnieją commity których lokalnie nie masz."),
-		"  "+descStyle.Render("Dzieje się tak gdy ktoś inny wypchnął zmiany w między czasie."),
+		"  "+lipgloss.NewStyle().Foreground(ColorSubtext).Render("Zdalnie istnieją commity których lokalnie nie masz."),
+		"  "+lipgloss.NewStyle().Foreground(ColorSubtext).Render("Dzieje się gdy ktoś inny wypchnął zmiany w między czasie."),
 		"",
 		"  Wybierz akcję:",
 		"",
-		"  "+keyStyle.Render("[U]")+" "+optStyle.Render("  pull --rebase + push")+" "+
-			descStyle.Render("— (ZALECANE) pobierz zmiany, nałóż swoje na wierzchu i wypchnij"),
-		"",
-		"  "+keyStyle.Render("[F]")+" "+optStyle.Render("  force-with-lease push")+" "+
-			descStyle.Render("— NADPISUJE remote! Używaj tylko gdy wiesz co robisz"),
-		"",
-		"  "+keyStyle.Render("[ESC]")+" "+descStyle.Render("— anuluj, wróć do Status"),
-		"",
 	)
 
-	// Ostrzeżenie przy force
-	lines = append(lines,
-		"  "+descStyle.Render("💡 --force-with-lease jest bezpieczniejszy od --force:"),
-		"  "+descStyle.Render("   odrzuci push jeśli ktoś wypchnął nowe commity od Twojego fetch."),
+	uKey := lipgloss.NewStyle().Foreground(ColorBg).Background(ColorSuccess).Padding(0, 1).Bold(true).Render("[U]")
+	fKey := lipgloss.NewStyle().Foreground(ColorBg).Background(ColorWarning).Padding(0, 1).Bold(true).Render("[F]")
+	escKey := lipgloss.NewStyle().Foreground(ColorBg).Background(ColorSurface).Padding(0, 1).Render("[ESC]")
+
+	rows = append(rows,
+		"  "+uKey+"  "+lipgloss.NewStyle().Foreground(ColorText).Render("git pull --rebase + push")+
+			"  "+lipgloss.NewStyle().Foreground(ColorMuted).Render("(ZALECANE) pobierz zmiany i wypchnij"),
+		"",
+		"  "+fKey+"  "+lipgloss.NewStyle().Foreground(ColorText).Render("force-with-lease push")+
+			"  "+lipgloss.NewStyle().Foreground(ColorMuted).Render("NADPISUJE remote — tylko gdy świadomy wybór"),
+		"",
+		"  "+escKey+"  "+lipgloss.NewStyle().Foreground(ColorMuted).Render("Anuluj, wróć do Status"),
+		"",
+		"  "+lipgloss.NewStyle().Foreground(ColorMuted).Render("💡 --force-with-lease odrzuci push jeśli ktoś wypchnął nowe commity od Twojego fetch."),
 	)
 
-	return strings.Join(lines, "\n") + "\n"
+	return strings.Join(rows, "\n") + "\n"
 }
 
-// ─── Pasek statusu i klawiszy ─────────────────────────────────────────────
+// ─── Status bar ───────────────────────────────────────────────────────────
 
 func (m GitPanelModel) renderStatusBar() string {
 	if m.statusMsg == "" {
 		return ""
 	}
-	style := StyleSuccess
+	var badge string
 	if m.statusErr {
-		style = StyleError
+		badge = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorError).Padding(0, 1).Render(m.statusMsg)
+	} else {
+		badge = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorSuccess).Padding(0, 1).Render(m.statusMsg)
 	}
-	return "\n  " + style.Render(m.statusMsg) + "\n"
+	return "\n  " + badge + "\n"
 }
 
-func (m GitPanelModel) renderKeyBindings(width int) string {
-	var bindings []string
+// ─── Key bar ──────────────────────────────────────────────────────────────
+
+func (m GitPanelModel) renderKeyBar(w int) string {
+	var bindings []KeyBinding
 
 	switch m.tab {
 	case GitTabStatus:
 		if m.pushConflict {
-			// Tryb rozwiązywania konfliktu push
-			bindings = append(bindings,
-				keyBind("U", "pull+rebase+push"),
-				keyBind("F", "force-with-lease"),
-				keyBind("ESC", "Anuluj"),
-			)
+			bindings = []KeyBinding{{"U", "pull+rebase+push"}, {"F", "force-with-lease"}, {"ESC", "Anuluj"}}
 		} else if m.showDiff {
-			bindings = append(bindings,
-				keyBind("ESC / d", "Zamknij diff"),
-				keyBind("↑↓", "Przewijaj"),
-			)
+			bindings = []KeyBinding{{"ESC / d", "Zamknij diff"}, {"↑↓", "Przewijaj"}}
 		} else if m.gitStatus != nil && !m.gitStatus.IsClean {
 			if m.commitInput.Focused() {
-				bindings = append(bindings,
-					keyBind("ENTER", "Commit"),
-					keyBind("ESC", "Anuluj"),
-				)
+				bindings = []KeyBinding{{"ENTER", "Commit"}, {"ESC", "Anuluj"}}
 			} else {
-				bindings = append(bindings,
-					keyBind("↑↓ / j/k", "Wybierz plik"),
-					keyBind("SPACJA", "Zaznacz/odznacz"),
-					keyBind("a", "Wszystkie"),
-					keyBind("d / ENTER", "Diff"),
-					keyBind("i", "Wpisz commit"),
-					keyBind("p", "Push"),
-				)
+				bindings = []KeyBinding{
+					{"↑↓ / j k", "Wybierz plik"},
+					{"SPACJA", "Zaznacz/odznacz"},
+					{"a", "Wszystkie"},
+					{"d / ENTER", "Diff"},
+					{"i", "Wpisz commit"},
+					{"p", "Push"},
+				}
 			}
 		} else {
-			bindings = append(bindings, keyBind("p", "Push do remote"))
+			bindings = []KeyBinding{{"p", "Push do remote"}}
 		}
 	case GitTabBranches:
-		bindings = append(bindings,
-			keyBind("ENTER", "Checkout"),
-			keyBind("↑↓ / j/k", "Nawigacja"),
-		)
+		bindings = []KeyBinding{{"ENTER", "Checkout"}, {"↑↓ / j k", "Nawigacja"}}
 	case GitTabHistory:
-		bindings = append(bindings, keyBind("↑↓ / j/k", "Nawigacja"))
+		bindings = []KeyBinding{{"↑↓ / j k", "Nawigacja"}}
 	case GitTabGraph:
-		bindings = append(bindings,
-			keyBind("↑↓ / j/k", "Nawigacja"),
-		)
+		bindings = []KeyBinding{{"↑↓ / j k", "Nawigacja"}}
 	}
 
 	bindings = append(bindings,
-		keyBind("TAB / 1-4", "Zakładki"),
-		keyBind("Q / ESC", "Powrót"),
+		KeyBinding{"TAB / 1-4", "Zakładki"},
+		KeyBinding{"Q / ESC", "Powrót"},
 	)
 
-	divider := Divider(width)
-	row := strings.Join(bindings, "  ")
-	return "\n" + divider + "\n" + lipgloss.NewStyle().Padding(0, 2).Render(row) + "\n"
+	return KeyBar(bindings, w)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
-// countChecked zwraca liczbę zaznaczonych (zaindeksowanych) plików.
 func (m GitPanelModel) countChecked() int {
 	count := 0
 	for _, v := range m.stagedFiles {
@@ -1100,7 +1003,6 @@ func (m GitPanelModel) countChecked() int {
 	return count
 }
 
-// graphVisibleLines zwraca liczbę linii grafu widocznych w panelu.
 func (m GitPanelModel) graphVisibleLines() int {
 	v := m.height - 14
 	if v < 5 {
@@ -1109,7 +1011,6 @@ func (m GitPanelModel) graphVisibleLines() int {
 	return v
 }
 
-// diffVisibleLines zwraca liczbę linii diff widocznych w panelu.
 func (m GitPanelModel) diffVisibleLines() int {
 	v := m.height - 14
 	if v < 5 {
@@ -1118,18 +1019,7 @@ func (m GitPanelModel) diffVisibleLines() int {
 	return v
 }
 
-// colorizeGraphLine przetwarza jedną linię git log --graph (bez kolorów ANSI)
-// i zwraca ją z kolorami Lipgloss oraz znakami Unicode zamiast ASCII.
-//
-// Schemat transformacji znaków:
-//
-//	* → ●  (commit dot, fioletowy)
-//	| → │  (pionowa linia, niebieskoszary)
-//	/ → ╱  (ukos prawy, niebieskoszary)
-//	\ → ╲  (ukos lewy, niebieskoszary)
-//	- → ─  (pozioma linia)
-//	_ → ─  (podkreślenie = pozioma linia)
-//	+ → ┼  (skrzyżowanie)
+// colorizeGraphLine koloruje jedną linię git log --graph.
 func colorizeGraphLine(line string) string {
 	if strings.TrimSpace(line) == "" {
 		return line
@@ -1138,7 +1028,6 @@ func colorizeGraphLine(line string) string {
 	runes := []rune(line)
 	n := len(runes)
 
-	// Znajdź pozycję * — markera commita
 	starPos := -1
 	for i, ch := range runes {
 		if ch == '*' {
@@ -1149,7 +1038,6 @@ func colorizeGraphLine(line string) string {
 
 	var sb strings.Builder
 
-	// Przetworz sekcję grafu (do * włącznie)
 	graphEnd := n
 	if starPos >= 0 {
 		graphEnd = starPos + 1
@@ -1176,18 +1064,15 @@ func colorizeGraphLine(line string) string {
 		}
 	}
 
-	// Brak commita w tej linii (czysta linia grafu)
 	if starPos < 0 || starPos+1 >= n {
 		return sb.String()
 	}
 
-	// Przetworz info commita: hash, dekoracje, wiadomość
 	rest := strings.TrimLeft(string(runes[starPos+1:]), " ")
 	if rest == "" {
 		return sb.String()
 	}
 
-	// Wyodrębnij hash (pierwsze słowo)
 	spaceIdx := strings.IndexByte(rest, ' ')
 	if spaceIdx < 0 {
 		sb.WriteString(" " + graphHashStyle.Render(rest))
@@ -1195,17 +1080,13 @@ func colorizeGraphLine(line string) string {
 	}
 	hash := rest[:spaceIdx]
 	remainder := rest[spaceIdx+1:]
-
 	sb.WriteString(" " + graphHashStyle.Render(hash) + " ")
 
-	// Sprawdź czy są dekoracje ref: (HEAD -> master, origin/master)
 	if strings.HasPrefix(remainder, "(") {
 		closeIdx := strings.Index(remainder, ")")
 		if closeIdx > 0 {
 			decoStr := remainder[1:closeIdx]
 			msg := strings.TrimSpace(remainder[closeIdx+1:])
-
-			// Renderuj dekoracje
 			sb.WriteString(graphLineStyle.Render("("))
 			decos := strings.Split(decoStr, ", ")
 			for i, d := range decos {
@@ -1216,9 +1097,8 @@ func colorizeGraphLine(line string) string {
 				switch {
 				case strings.HasPrefix(d, "HEAD ->"):
 					sb.WriteString(graphHEADStyle.Render("HEAD →"))
-					branchName := strings.TrimSpace(strings.TrimPrefix(d, "HEAD ->"))
-					if branchName != "" {
-						sb.WriteString(graphHEADStyle.Render(" " + branchName))
+					if bn := strings.TrimSpace(strings.TrimPrefix(d, "HEAD ->")); bn != "" {
+						sb.WriteString(graphHEADStyle.Render(" " + bn))
 					}
 				case strings.HasPrefix(d, "tag:"):
 					sb.WriteString(graphTagStyle.Render(d))
@@ -1239,14 +1119,6 @@ func colorizeGraphLine(line string) string {
 }
 
 // colorizeDiffLine koloruje jedną linię unified diff.
-//
-// Schemat kolorów:
-//
-//	+ linie dodane     → zielony
-//	- linie usunięte   → czerwony
-//	@@ nagłówki hunka  → niebieski
-//	diff/index linie   → szary
-//	+++ / ---          → szary (meta-nagłówki)
 func colorizeDiffLine(line string) string {
 	switch {
 	case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
@@ -1265,7 +1137,7 @@ func colorizeDiffLine(line string) string {
 	}
 }
 
-// gitFileIcon zwraca ikonę i styl dla statusu pliku git (M, A, D, ??, itp.).
+// gitFileIcon zwraca ikonę i styl dla statusu pliku git.
 func gitFileIcon(status string) (string, lipgloss.Style) {
 	s := strings.TrimSpace(status)
 	switch {
@@ -1278,13 +1150,12 @@ func gitFileIcon(status string) (string, lipgloss.Style) {
 	case strings.Contains(s, "R"):
 		return "→", lipgloss.NewStyle().Foreground(ColorInfo)
 	case strings.Contains(s, "?"):
-		return "?", lipgloss.NewStyle().Foreground(ColorSubtext)
+		return "?", lipgloss.NewStyle().Foreground(ColorMuted)
 	default:
 		return "·", StyleMuted
 	}
 }
 
-// max zwraca większą z dwóch liczb całkowitych.
 func max(a, b int) int {
 	if a > b {
 		return a
