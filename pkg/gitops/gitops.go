@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,6 +43,49 @@ type CommitInfo struct {
 	RelativeDate string
 }
 
+// GenerateAutoCommitMessage generuje prosty, opisowy komunikat commita
+// na podstawie listy zmienionych plików oraz aktualnej daty/czasu.
+// Przykład:
+//   chore: update app/main.go, pkg/tui/model.go and 3 more files (2026-03-12 14:05)
+func GenerateAutoCommitMessage(files []DirtyFile, now time.Time) string {
+	if len(files) == 0 {
+		return now.Format("chore: update (2006-01-02 15:04)")
+	}
+
+	const maxNames = 3
+	names := make([]string, 0, maxNames)
+	seen := make(map[string]bool)
+
+	for _, f := range files {
+		path := strings.TrimSpace(f.Path)
+		if path == "" {
+			continue
+		}
+		parts := strings.Split(path, "/")
+		name := parts[len(parts)-1]
+		if len(parts) > 1 {
+			// pokaż główny katalog + plik, np. "app/main.go"
+			name = parts[0] + "/" + name
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+		if len(names) >= maxNames {
+			break
+		}
+	}
+
+	rest := ""
+	if len(files) > len(names) {
+		rest = fmt.Sprintf(" and %d more files", len(files)-len(names))
+	}
+
+	title := "update " + strings.Join(names, ", ")
+	return fmt.Sprintf("chore: %s%s (%s)", title, rest, now.Format("2006-01-02 15:04"))
+}
+
 // DirtyFile reprezentuje plik z brudnym statusem w repozytorium.
 type DirtyFile struct {
 	// Status — kod statusu git (np. "M " = zmodyfikowany, "??" = nieśledzony).
@@ -61,6 +105,12 @@ type StatusResult struct {
 	HasRemote bool
 	// RemoteURL — URL remote "origin" (puste jeśli brak).
 	RemoteURL string
+	// HasUpstream — true jeśli bieżąca gałąź ma ustawiony upstream (tracking branch).
+	HasUpstream bool
+	// Ahead — liczba commitów lokalnych więcej niż na gałęzi upstream.
+	Ahead int
+	// Behind — liczba commitów na upstream, których lokalnie jeszcze nie ma.
+	Behind int
 	// DirtyFiles — lista brudnych plików jeśli repozytorium nie jest czyste.
 	DirtyFiles []DirtyFile
 	// Branch — aktualna gałąź.
@@ -102,15 +152,64 @@ func AuditRepo(workdir string) (*StatusResult, error) {
 	// Pobierz informacje o remote "origin"
 	remoteURL := GetRemoteURL(workdir)
 
+	hasRemote := remoteURL != ""
+	hasUpstream := false
+	ahead, behind := 0, 0
+
+	if hasRemote {
+		if a, b, err := getAheadBehind(workdir, branch); err == nil {
+			hasUpstream = true
+			ahead, behind = a, b
+		}
+	}
+
 	return &StatusResult{
 		IsClean:    len(dirty) == 0,
 		IsGitRepo:  true,
-		HasRemote:  remoteURL != "",
+		HasRemote:  hasRemote,
 		RemoteURL:  remoteURL,
+		HasUpstream: hasUpstream,
+		Ahead:      ahead,
+		Behind:     behind,
 		DirtyFiles: dirty,
 		Branch:     branch,
 		LastCommit: *commit,
 	}, nil
+}
+
+// getAheadBehind zwraca liczbę commitów lokalnych (ahead) i zdalnych (behind)
+// względem gałęzi upstream (branch@{upstream}). Jeśli gałąź nie ma upstreamu,
+// zwraca błąd.
+func getAheadBehind(workdir, branch string) (ahead, behind int, err error) {
+	// Najpierw pobierz aktualny stan z remote, aby dane były świeże.
+	// Jeśli fetch się nie powiedzie (brak sieci/remote), ignorujemy błąd
+	// i próbujemy dalej na lokalnym stanie.
+	_, _ = runGit(workdir, "fetch", "--prune", "--quiet")
+
+	// Sprawdź czy istnieje upstream; jeśli nie, git zwróci błąd.
+	if _, err := runGit(workdir, "rev-parse", "--abbrev-ref", branch+"@{upstream}"); err != nil {
+		return 0, 0, err
+	}
+
+	out, err := runGit(workdir, "rev-list", "--left-right", "--count", branch+"..."+branch+"@{upstream}")
+	if err != nil {
+		return 0, 0, err
+	}
+
+	parts := strings.Fields(strings.TrimSpace(out))
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("nieoczekiwany format rev-list: %q", out)
+	}
+
+	a, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	b, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	return a, b, nil
 }
 
 // getDirtyFiles zwraca listę plików ze "brudnym" statusem git.

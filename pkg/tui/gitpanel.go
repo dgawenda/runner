@@ -15,6 +15,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -96,6 +97,9 @@ type GitPanelModel struct {
 	statusMsg string
 	statusErr bool
 	loading   bool
+
+	// Auto commit message (ostatnio wygenerowany)
+	autoCommitGenerated bool
 }
 
 func NewGitPanelModel(width, height int) GitPanelModel {
@@ -432,6 +436,15 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 			}
 
 		case "enter":
+		case "m", "M":
+			// [m] — wygeneruj automatyczną wiadomość commita na podstawie zmian
+			if m.tab == GitTabStatus && m.gitStatus != nil && !m.gitStatus.IsClean {
+				msg := gitops.GenerateAutoCommitMessage(m.gitStatus.DirtyFiles, time.Now())
+				m.commitInput.SetValue(msg)
+				m.autoCommitGenerated = true
+				m.statusMsg = "✎ Wygenerowano automatyczny opis commita — możesz go edytować przed ENTER"
+				m.statusErr = false
+			}
 			switch m.tab {
 			case GitTabStatus:
 				if m.gitStatus != nil && !m.gitStatus.IsClean && len(m.gitStatus.DirtyFiles) > 0 {
@@ -595,6 +608,32 @@ func (m GitPanelModel) renderStatusTab(w int) string {
 			remoteShort = "…" + remoteShort[len(remoteShort)-52:]
 		}
 		rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorMuted).Render("🔗 "+remoteShort))
+
+		// Informacje ahead/behind względem upstream
+		if m.gitStatus.HasUpstream {
+			a := m.gitStatus.Ahead
+			b := m.gitStatus.Behind
+			var syncLine string
+			switch {
+			case a == 0 && b == 0:
+				syncLine = lipgloss.NewStyle().Foreground(ColorSuccess).Render("⮃ Gałąź zsynchronizowana z origin")
+			default:
+				var parts []string
+				if a > 0 {
+					parts = append(parts, lipgloss.NewStyle().Foreground(ColorSuccess).Render(fmt.Sprintf("↑ %d lokalnych", a)))
+				}
+				if b > 0 {
+					parts = append(parts, lipgloss.NewStyle().Foreground(ColorWarning).Render(fmt.Sprintf("↓ %d do pobrania", b)))
+				}
+				syncLine = lipgloss.NewStyle().Foreground(ColorMuted).Render("⮃ " + strings.Join(parts, "  "))
+			}
+			rows = append(rows, "  "+syncLine)
+		} else {
+			rows = append(rows,
+				"  "+lipgloss.NewStyle().Foreground(ColorMuted).
+					Render("⮃ Brak upstream — pierwszy push ustawi śledzenie (origin/"+m.gitStatus.Branch+")"),
+			)
+		}
 	} else {
 		rows = append(rows,
 			"  "+lipgloss.NewStyle().Foreground(ColorBg).Background(ColorWarning).Padding(0, 1).
@@ -693,7 +732,8 @@ func (m GitPanelModel) renderStatusTab(w int) string {
 		if m.commitInput.Focused() {
 			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("✎  Wiadomość commita [ESC anuluj]:"))
 		} else {
-			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorSubtext).Render("  [i] Napisz commit    [p] Push"))
+			hints := "[i] Napisz commit    [m] Auto opis    [p] Push"
+			rows = append(rows, "  "+lipgloss.NewStyle().Foreground(ColorSubtext).Render("  "+hints))
 		}
 		rows = append(rows, "  "+m.commitInput.View())
 		rows = append(rows, "")
