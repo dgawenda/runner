@@ -173,15 +173,6 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	args = append(args, "--message", deployMessage)
 	send(outputCh, fmt.Sprintf("💬 Netlify opis: %s", deployMessage))
 
-	// Przekaż zmienne środowiskowe do Netlify CLI jako flagi --env KEY=VALUE.
-	// Kolejność priorytetu: env.Env (rnr.yaml) > .env plik > token Netlify
-	for k, v := range dotEnvVars {
-		// Nie nadpisuj zmiennych zdefiniowanych bezpośrednio w rnr.yaml
-		if _, ok := env.Env[k]; !ok {
-			args = append(args, "--env", fmt.Sprintf("%s=%s", k, v))
-		}
-	}
-
 	// Zmienne środowiskowe dla procesu CLI (systemowe — dla autoryzacji)
 	envVars := mergeEnv(dotEnvVars, env.Env)
 	envVars = mergeEnv(envVars, map[string]string{
