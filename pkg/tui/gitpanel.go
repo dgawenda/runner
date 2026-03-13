@@ -307,6 +307,33 @@ func (m GitPanelModel) Update(msg tea.Msg) (GitPanelModel, tea.Cmd) {
 			}
 		}
 
+		// ENTER z głównego widoku Status:
+		// - jeśli commit input NIE jest sfocusowany, ale ma treść → spróbuj commit
+		// - jeśli commit input pusty → sfocusuj pole, żeby user mógł wpisać opis
+		if m.tab == GitTabStatus && !m.commitInput.Focused() && msg.String() == "enter" {
+			if !m.loading {
+				commitMsg := strings.TrimSpace(m.commitInput.Value())
+				if commitMsg == "" {
+					// Brak opisu — przełącz fokus na input
+					m.commitInput.Focus()
+					m.commitInput.Width = min(m.width-6, 70)
+					m.statusMsg = "✎ Wpisz opis commita i naciśnij ENTER"
+					m.statusErr = false
+				} else if m.gitStatus == nil || m.gitStatus.IsClean {
+					m.statusMsg = "ℹ  Brak zmian do zatwierdzenia"
+					m.statusErr = false
+				} else {
+					m.loading = true
+					m.statusMsg = ""
+					filesToStage := m.selectedFilePaths()
+					return m, func() tea.Msg {
+						return GitCommitRequestMsg{Message: commitMsg, Files: filesToStage}
+					}
+				}
+			}
+			return m, tea.Batch(cmds...)
+		}
+
 		// Główny handler klawiszy
 		switch msg.String() {
 		case "1":

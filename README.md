@@ -424,7 +424,7 @@ Potok wdrożeniowy definiujesz w pliku `rnr.yaml`:
 stages:
 
   - name: install
-    run: npm ci
+    run: npm install
     description: "Instalacja zależności npm"
 
   - name: lint
@@ -541,7 +541,7 @@ environments:
 stages:
 
   - name: install
-    run: npm ci
+    run: npm install
 
   - name: build
     run: npm run build

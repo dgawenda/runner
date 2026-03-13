@@ -468,7 +468,7 @@ func DefaultPipelineYAMLFromWizard(
 		stagesBlock = fmt.Sprintf(`
   # ── Instalacja zależności ──────────────────────────────────────────────────
   - name: install
-    run: npm ci
+    run: npm install
 
   # ── Jakość kodu ───────────────────────────────────────────────────────────
   - name: lint
