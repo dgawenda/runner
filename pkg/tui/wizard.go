@@ -11,6 +11,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -820,7 +821,24 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 		}
 
 	case wizardStepNetlifyToken:
-		m.netlifyToken = m.inputs[2].Value()
+		// Netlify token powinien być access tokenem, NIE URL-em repozytorium.
+		token := strings.TrimSpace(m.inputs[2].Value())
+		if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
+			// Typowy błąd: użytkownik wkleja URL GitHuba zamiast tokenu.
+			m.validationErr = "To wygląda na URL (np. GitHub), a nie Netlify access token.\n" +
+				"Wklej token z Netlify → User Settings → Personal access tokens."
+			return m, nil
+		}
+
+		// Jeśli pole puste, spróbuj użyć NETLIFY_AUTH_TOKEN z ENV.
+		if token == "" {
+			if envToken := strings.TrimSpace(os.Getenv("NETLIFY_AUTH_TOKEN")); envToken != "" {
+				token = envToken
+			}
+		}
+
+		m.validationErr = ""
+		m.netlifyToken = token
 		m.step = wizardStepNetlifySiteMode
 
 	case wizardStepNetlifySiteMode:
