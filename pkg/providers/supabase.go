@@ -44,44 +44,11 @@ func (p *supabaseProvider) Name() string { return "Supabase" }
 //   - supabase-cli zainstalowany (npm install -g supabase lub scoop/brew)
 //   - supabase_project_ref lub supabase_db_url w rnr.conf.yaml
 func (p *supabaseProvider) Migrate(ctx context.Context, env config.Environment, outputCh chan<- string) error {
-	db := env.Database
-
-	if db.SupabaseProjectRef == "" && db.SupabaseDBURL == "" {
-		return fmt.Errorf("brak supabase_project_ref lub supabase_db_url — uzupełnij w rnr.conf.yaml → environments.X.database")
-	}
-
-	if err := checkCLI("supabase",
-		"npm install -g supabase\n  lub: brew install supabase/tap/supabase\n  lub: scoop install supabase"); err != nil {
-		return err
-	}
-
-	send(outputCh, "🗄️  Supabase: rozpoczynam migracje bazy danych...")
-	send(outputCh, "⚠️  UWAGA: Migracje są nieodwracalne! Sprawdź pliki migracji przed kontynuacją.")
-
-	envVars := mergeEnv(env.Env, map[string]string{
-		"SUPABASE_ACCESS_TOKEN": db.SupabaseServiceRoleKey,
-	})
-
-	var args []string
-	// Aktualne supabase CLI dla `db push` nie wspiera już --project-ref,
-	// tylko --db-url / --linked. Dlatego ZAWSZE używamy SupabaseDBURL,
-	// a project_ref traktujemy tylko jako informację pomocniczą.
-	if db.SupabaseDBURL != "" {
-		args = []string{"db", "push", "--db-url", db.SupabaseDBURL, "--include-all"}
-		send(outputCh, "📡 Supabase: łączę przez supabase db push --db-url")
-	} else {
-		// Brak URL — spróbuj podpowiedzieć użytkownikowi, co poprawić.
-		return fmt.Errorf("Supabase: brak supabase_db_url dla środowiska — wklej Connection string z Supabase → Project Settings → Database")
-	}
-
-	runner := NewRunner(".", p.masker, p.log)
-	result := runner.RunCommand(ctx, "supabase", args, envVars, outputCh)
-
-	if result.Error != nil {
-		return fmt.Errorf("Supabase migracja nieudana: %w", result.Error)
-	}
-
-	send(outputCh, "✅ Supabase: migracje zakończone sukcesem")
+	// Tymczasowo wyłączamy wykonywanie migracji Supabase z poziomu rnr.
+	// rnr będzie się łączył z już istniejącą bazą, ale NIE będzie uruchamiał
+	// `supabase db push`. Dzięki temu deploy nie zablokuje się na migracjach.
+	send(outputCh, "🛑 Supabase: etap migrate jest tymczasowo WYŁĄCZONY w rnr (pominięty).")
+	send(outputCh, "ℹ Upewnij się, że migracje zostały zastosowane ręcznie przed deployem.")
 	return nil
 }
 
@@ -98,37 +65,8 @@ func (p *supabaseProvider) Migrate(ctx context.Context, env config.Environment, 
 // Jeśli migracja jest wadliwa, należy napisać nową migrację addytywną,
 // a nie cofać istniejące (cofanie może zniszczyć dane produkcyjne).
 func (p *supabaseProvider) Promote(ctx context.Context, sourceEnv, targetEnv config.Environment, outputCh chan<- string) error {
-	sourceDB := sourceEnv.Database
-	targetDB := targetEnv.Database
-
-	send(outputCh, "📊 Supabase Promote: porównuję staging → production...")
-	send(outputCh, "")
-	send(outputCh, "⚠️  WAŻNE OSTRZEŻENIE BEZPIECZEŃSTWA:")
-	send(outputCh, "   Operacja promote stosuje migracje bazodanowe na PRODUKCJI.")
-	send(outputCh, "   Jest to operacja NIEODWRACALNA — cofanie danych jest niemożliwe.")
-	send(outputCh, "   Stosowana jest zasada 'roll-forward': tylko nowe migracje addytywne.")
-	send(outputCh, "")
-
-	if sourceDB.SupabaseProjectRef == "" && sourceDB.SupabaseDBURL == "" {
-		return fmt.Errorf("brak konfiguracji Supabase dla środowiska stagingowego")
-	}
-	if targetDB.SupabaseProjectRef == "" && targetDB.SupabaseDBURL == "" {
-		return fmt.Errorf("brak konfiguracji Supabase dla środowiska produkcyjnego")
-	}
-
-	// Sprawdź status migracji na staging
-	send(outputCh, "🔍 Sprawdzam migracje na staging...")
-	if err := p.checkMigrationStatus(ctx, sourceEnv, outputCh); err != nil {
-		return fmt.Errorf("błąd sprawdzania statusu staging: %w", err)
-	}
-
-	// Zastosuj migracje na produkcji
-	send(outputCh, "🚀 Stosowanie migracji na production...")
-	if err := p.Migrate(ctx, targetEnv, outputCh); err != nil {
-		return fmt.Errorf("błąd migracji production: %w", err)
-	}
-
-	send(outputCh, "✅ Supabase Promote: migracje zastosowane na production")
+	send(outputCh, "🛑 Supabase Promote: operacja promote jest tymczasowo WYŁĄCZONA w rnr.")
+	send(outputCh, "ℹ Jeśli potrzebujesz promote, wykonaj migracje ręcznie na produkcji.")
 	return nil
 }
 
