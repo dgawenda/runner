@@ -63,16 +63,15 @@ func (p *supabaseProvider) Migrate(ctx context.Context, env config.Environment, 
 	})
 
 	var args []string
-	// Preferuj bezpieczniejszą ścieżkę przez project_ref, jeśli jest dostępna.
-	// URL bazy bywa ręcznie edytowany i łatwo go zepsuć (np. nieescapowane hasło).
-	if db.SupabaseProjectRef != "" {
-		// Przez project ref (wymaga zalogowania)
-		args = []string{"db", "push", "--project-ref", db.SupabaseProjectRef, "--include-all"}
-		send(outputCh, fmt.Sprintf("📡 Supabase: łączę z projektem %s", db.SupabaseProjectRef))
-	} else {
-		// Fallback: bezpośrednie połączenie przez db URL
+	// Aktualne supabase CLI dla `db push` nie wspiera już --project-ref,
+	// tylko --db-url / --linked. Dlatego ZAWSZE używamy SupabaseDBURL,
+	// a project_ref traktujemy tylko jako informację pomocniczą.
+	if db.SupabaseDBURL != "" {
 		args = []string{"db", "push", "--db-url", db.SupabaseDBURL, "--include-all"}
 		send(outputCh, "📡 Supabase: łączę przez supabase db push --db-url")
+	} else {
+		// Brak URL — spróbuj podpowiedzieć użytkownikowi, co poprawić.
+		return fmt.Errorf("Supabase: brak supabase_db_url dla środowiska — wklej Connection string z Supabase → Project Settings → Database")
 	}
 
 	runner := NewRunner(".", p.masker, p.log)
