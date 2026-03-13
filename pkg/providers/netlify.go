@@ -126,8 +126,27 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 		send(outputCh, fmt.Sprintf("📄 Netlify: załadowano %d zmiennych z .env", len(dotEnvVars)))
 	}
 
+	// Wybierz katalog do publikacji:
+	// domyślnie katalog projektu, ale jeśli istnieje typowy katalog buildu
+	// (np. .output/public dla Nuxt, dist, build, public), użyj go zamiast.
+	deployDir := workdir
+	candidates := []string{
+		".output/public", // Nuxt 3/4 (nitro preset node-server, statyczne assety)
+		"dist",
+		"build",
+		"public",
+	}
+	for _, rel := range candidates {
+		full := filepath.Join(workdir, rel)
+		if info, err := os.Stat(full); err == nil && info.IsDir() {
+			deployDir = full
+			send(outputCh, fmt.Sprintf("📦 Netlify: wykryto katalog buildu %s — używam jako --dir", rel))
+			break
+		}
+	}
+
 	// Buduj argumenty komendy
-	args := []string{"deploy", "--site", d.NetlifySiteID, "--dir", workdir}
+	args := []string{"deploy", "--site", d.NetlifySiteID, "--dir", deployDir}
 	if d.NetlifyProd {
 		args = append(args, "--prod")
 		send(outputCh, "🚀 Netlify: wdrożenie na PRODUKCJĘ (--prod)")
