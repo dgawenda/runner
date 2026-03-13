@@ -63,14 +63,16 @@ func (p *supabaseProvider) Migrate(ctx context.Context, env config.Environment, 
 	})
 
 	var args []string
-	if db.SupabaseDBURL != "" {
-		// Bezpośrednie połączenie przez db URL
-		args = []string{"db", "push", "--db-url", db.SupabaseDBURL, "--include-all"}
-		send(outputCh, "📡 Supabase: łączę przez supabase db push --db-url")
-	} else {
+	// Preferuj bezpieczniejszą ścieżkę przez project_ref, jeśli jest dostępna.
+	// URL bazy bywa ręcznie edytowany i łatwo go zepsuć (np. nieescapowane hasło).
+	if db.SupabaseProjectRef != "" {
 		// Przez project ref (wymaga zalogowania)
 		args = []string{"db", "push", "--project-ref", db.SupabaseProjectRef, "--include-all"}
 		send(outputCh, fmt.Sprintf("📡 Supabase: łączę z projektem %s", db.SupabaseProjectRef))
+	} else {
+		// Fallback: bezpośrednie połączenie przez db URL
+		args = []string{"db", "push", "--db-url", db.SupabaseDBURL, "--include-all"}
+		send(outputCh, "📡 Supabase: łączę przez supabase db push --db-url")
 	}
 
 	runner := NewRunner(".", p.masker, p.log)
