@@ -173,9 +173,13 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 	args = append(args, "--message", deployMessage)
 	send(outputCh, fmt.Sprintf("💬 Netlify opis: %s", deployMessage))
 
-	// Zmienne środowiskowe dla procesu CLI (systemowe — dla autoryzacji)
-	envVars := mergeEnv(dotEnvVars, env.Env)
-	envVars = mergeEnv(envVars, map[string]string{
+	// Zmienne środowiskowe:
+	// - siteEnvVars: to co chcemy zsynchronizować jako zmienne środowiska Netlify
+	//   (env z rnr.yaml + wartości z .env)
+	// - envVars: pełne środowisko procesu CLI (siteEnvVars + token + SITE_ID)
+	siteEnvVars := mergeEnv(dotEnvVars, env.Env)
+
+	envVars := mergeEnv(siteEnvVars, map[string]string{
 		"NETLIFY_AUTH_TOKEN": d.NetlifyAuthToken,
 		"NETLIFY_SITE_ID":    d.NetlifySiteID,
 	})
@@ -191,6 +195,9 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 		deployMessage,
 	))
 
+	// Zsynchronizuj zmienne środowiskowe z projektem Netlify (zamiennik starego --env)
+	p.syncEnvVarsToNetlify(ctx, siteEnvVars, envVars, outputCh)
+
 	runner := NewRunner(workdir, p.masker, p.log)
 	result := runner.RunCommand(ctx, "netlify", args, envVars, outputCh)
 
@@ -200,6 +207,50 @@ func (p *netlifyProvider) Deploy(ctx context.Context, env config.Environment, ou
 
 	send(outputCh, "✅ Netlify: wdrożenie zakończone sukcesem")
 	return nil
+}
+
+// syncEnvVarsToNetlify ustawia zmienne środowiskowe na projekcie Netlify
+// na podstawie mapy siteEnvVars. Działa jako zamiennik usuniętej flagi
+// `netlify deploy --env KEY=VALUE`.
+//
+// Zasady:
+//   - nie maskujemy/przycinamy wartości — CLI dostaje je wprost przez env
+//   - nie przerywamy deployu gdy pojedyncze env:set się nie powiedzie
+//     (logujemy tylko ostrzeżenie)
+func (p *netlifyProvider) syncEnvVarsToNetlify(
+	ctx context.Context,
+	siteEnvVars map[string]string,
+	processEnv map[string]string,
+	outputCh chan<- string,
+) {
+	if len(siteEnvVars) == 0 {
+		return
+	}
+
+	workdir := p.projectRoot
+	if workdir == "" {
+		workdir = "."
+	}
+
+	runner := NewRunner(workdir, p.masker, p.log)
+
+	for k, v := range siteEnvVars {
+		if v == "" {
+			continue
+		}
+		// Nie nadpisujemy specjalnych zmiennych Netlify używanych do autoryzacji.
+		if k == "NETLIFY_AUTH_TOKEN" || k == "NETLIFY_SITE_ID" {
+			continue
+		}
+
+		send(outputCh, fmt.Sprintf("🔐 Netlify env:set %s (z .env / rnr)", k))
+		args := []string{"env:set", k, v}
+
+		result := runner.RunCommand(ctx, "netlify", args, processEnv, outputCh)
+		if result.Error != nil {
+			send(outputCh, fmt.Sprintf("⚠️  Netlify env:set %s nieudane: %v", k, result.Error))
+		}
+	}
 }
 
 // readDotEnv wczytuje plik .env z podanego katalogu i zwraca mapę KEY → VALUE.
